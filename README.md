@@ -18,6 +18,12 @@ To install `empress`, simply use Cargo:
 $ cargo install empress
 ```
 
+(or, if you use Arch, I maintain this package in the AUR:)
+
+```sh
+$ yay -S empress
+```
+
 Then launch the daemon process in order to use it — you will probably want to
 put this in an rcfile (or see below for setting up a service):
 
@@ -27,10 +33,13 @@ $ empress server
 
 The server will gracefully shut down if interrupted or signalled with `SIGTERM`.
 
+**NOTE:** If you install the D-Bus service below, an `empress` daemon will
+automagically spawn when any of the client commands below are executed.
+
 ## Usage
 
-Once you have the daemon running, you can communicate with it using one of
-several subcommands, e.g.:
+Once you have the daemon running (or you enable autostart below), you can
+communicate with it using one of several subcommands, e.g.:
 
 ```sh
 $ empress play-pause
