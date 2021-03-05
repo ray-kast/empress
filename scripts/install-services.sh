@@ -89,7 +89,7 @@ else
   mv -v "$dbus_dir/$dbus_file" /tmp || fail=$?
 fi
 
-if [[ -n "$fail" ]]; then
+if (( $fail != 0 )); then
   echo "ERROR: Installation failed."
   exit $fail
 fi
