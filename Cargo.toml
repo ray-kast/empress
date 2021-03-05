@@ -5,8 +5,10 @@ authors = ["rookie1024 <rookie1286@gmail.com>"]
 edition = "2018"
 description = "A D-Bus MPRIS daemon for controlling media players."
 documentation = "https://docs.rs/empress"
+readme = "README.md"
 repository = "https://github.com/ray-kast/empress"
 license = "AGPL-3.0-or-later"
+license-file = "LICENSE"
 keywords = ["mpris", "music", "play", "pause", "skip"]
 categories = ["command-line-utilities", "multimedia", "os"]
 
