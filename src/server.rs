@@ -417,7 +417,6 @@ impl Server {
         let self_1 = ret.clone();
         tokio::spawn(async move {
             while let Some(()) = scan_rx.recv().await {
-                eprintln!("Rescanning...");
                 self_1.scan().await.unwrap();
 
                 tokio::time::sleep(Duration::from_millis(200)).await;
@@ -490,8 +489,6 @@ impl Server {
     }
 
     async fn handle(&self, id: MethodId) -> Result<(), MethodErr> {
-        eprintln!("handling MethodId::{:?}", id);
-
         self.scan()
             .await
             .map_err(|e| method_err(e, "failed to scan for players"))?;
