@@ -1,6 +1,6 @@
 [package]
 name = "empress"
-version = "0.0.0"
+version = "1.0.0"
 authors = ["rookie1024 <rookie1286@gmail.com>"]
 edition = "2018"
 description = "A D-Bus MPRIS daemon for controlling media players."
@@ -13,6 +13,8 @@ categories = ["command-line-utilities", "multimedia", "os"]
 [dependencies]
 anyhow = "1.0.38"
 dbus = "0.9.2"
+dbus-crossroads = "0.3.0"
 dbus-tokio = "0.7.3"
+lazy_static = "1.4.0"
 structopt = "0.3.21"
 tokio = { version = "1.2.0", features = ["macros", "rt", "signal", "sync"] }

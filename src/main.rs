@@ -1,20 +1,66 @@
 use anyhow::{Context, Error};
-use dbus::nonblock;
-use dbus_tokio::connection;
+use lazy_static::lazy_static;
 use structopt::StructOpt;
-use tokio::{
-    runtime::Builder as RtBuilder,
-    select,
-    signal::{unix, unix::SignalKind},
-    sync::oneshot,
-};
+use tokio::runtime::Builder as RtBuilder;
+
+mod client;
+mod server;
 
 type Result<T = (), E = Error> = std::result::Result<T, E>;
 
+lazy_static! {
+    static ref API_IDENT: String = format!("Empress{}", env!("CARGO_PKG_VERSION_MAJOR"));
+    static ref NAME_PREFIX: String = format!("net.ryan_s.{}", *API_IDENT);
+    static ref PATH_PREFIX: String = format!("/net/ryan_s/{}", *API_IDENT);
+    static ref INTERFACE_NAME: String = format!("{}.Daemon", *NAME_PREFIX);
+    static ref SERVER_NAME: String = NAME_PREFIX.clone();
+    static ref SERVER_PATH: String = format!("{}/Daemon", *PATH_PREFIX);
+}
+
+#[derive(Debug, Clone, Copy, StructOpt)]
+enum MethodId {
+    /// Skip one track forwards
+    Next,
+    /// Skip one track backwards
+    Previous,
+    /// Pause a currently-playing player
+    Pause,
+    /// Like pause if a player is playing, otherwise like play
+    PlayPause,
+    /// Stop a currently-playing player
+    Stop,
+    /// Play a currently-paused player
+    Play,
+}
+
+const METHOD_IDS: &[MethodId] = &[
+    MethodId::Next,
+    MethodId::Previous,
+    MethodId::Pause,
+    MethodId::PlayPause,
+    MethodId::Stop,
+    MethodId::Play,
+];
+
+impl std::fmt::Display for MethodId {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::Next => "Next",
+            Self::Previous => "Previous",
+            Self::Pause => "Pause",
+            Self::PlayPause => "PlayPause",
+            Self::Stop => "Stop",
+            Self::Play => "Play",
+        })
+    }
+}
+
 #[derive(StructOpt)]
 enum Opts {
+    /// Launch a D-Bus service abstracting MPRIS players
     Server,
-    Client,
+    #[structopt(flatten)]
+    Client(MethodId),
 }
 
 fn main() {
@@ -35,61 +81,7 @@ fn run() -> Result {
     let opts = Opts::from_args();
 
     match opts {
-        Opts::Server => rt.block_on(run_server()),
-        Opts::Client => rt.block_on(run_client()),
+        Opts::Server => rt.block_on(server::run()),
+        Opts::Client(id) => rt.block_on(client::run(id)),
     }
-}
-
-async fn run_server() -> Result {
-    let (res, conn) = connection::new_session_sync().context("failed to connect to D-Bus")?;
-    let (close_tx, close_rx) = oneshot::channel();
-
-    tokio::spawn(async {
-        close_tx
-            .send(Error::from(res.await).context("D-Bus disconnected"))
-            .ok();
-    });
-
-    enum Event {
-        MprisMessage,
-        ClientRequest,
-        Stop(Option<Error>),
-    }
-
-    use Event::*;
-
-    let mut hup = unix::signal(SignalKind::hangup()).context("failed to hook SIGHUP")?;
-    let mut int = unix::signal(SignalKind::interrupt()).context("failed to hook SIGINT")?;
-    let mut quit = unix::signal(SignalKind::quit()).context("failed to hook SIGQUIT")?;
-    let mut term = unix::signal(SignalKind::terminate()).context("failed to hook SIGTERM")?;
-
-    loop {
-        match select!(
-            Some(()) = hup.recv() => Stop(None),
-            Some(()) = int.recv() => Stop(None),
-            Some(()) = quit.recv() => Stop(None),
-            Some(()) = term.recv() => Stop(None),
-            res = close_rx => Stop(res.context("failed to listen for stop").err()),
-        ) {
-            MprisMessage => todo!(),
-            ClientRequest => todo!(),
-            Stop(e) => {
-                if let Some(e) = e {
-                    eprintln!("ERROR: {:?}", e);
-                }
-
-                eprintln!("Shutting down...");
-
-                break;
-            },
-        }
-    }
-
-    Ok(())
-}
-
-async fn run_client() -> Result {
-    println!("Hello, servers!");
-
-    Ok(())
 }

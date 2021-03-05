@@ -74,6 +74,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "dbus-crossroads"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0a816e8ae3382c7b1bccfa6f2778346ee5b13f80e0eccf80cf8f2912af73995a"
+dependencies = [
+ "dbus",
+]
+
+[[package]]
 name = "dbus-tokio"
 version = "0.7.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -86,11 +95,13 @@ dependencies = [
 
 [[package]]
 name = "empress"
-version = "0.0.0"
+version = "1.0.0"
 dependencies = [
  "anyhow",
  "dbus",
+ "dbus-crossroads",
  "dbus-tokio",
+ "lazy_static",
  "structopt",
  "tokio",
 ]
