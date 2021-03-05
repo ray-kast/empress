@@ -1,0 +1,13 @@
+# Systemd unit file for empress
+
+[Unit]
+Description=A D-Bus MPRIS daemon for controlling media players.
+Documentation=https://github.com/ray-kast/empress/
+PartOf=graphical-session.target
+
+[Service]
+Type=dbus
+BusName=net.ryan_s.Empress1
+ExecStart=/path/to/empress server
+
+# vim:set ft=systemd:

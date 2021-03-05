@@ -1,3 +1,10 @@
+#![warn(missing_docs, clippy::all, clippy::pedantic, clippy::cargo)]
+#![deny(broken_intra_doc_links, missing_debug_implementations)]
+
+//! Binary crate for `empress`.  See [the
+//! README](https://github.com/ray-kast/empress/blob/master/README.md) for more
+//! details.
+
 use anyhow::{Context, Error};
 use lazy_static::lazy_static;
 use structopt::StructOpt;

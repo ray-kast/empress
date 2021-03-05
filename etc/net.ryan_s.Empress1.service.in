@@ -1,0 +1,8 @@
+# D-Bus service file for empress
+
+[D-BUS Service]
+Name=net.ryan_s.Empress1
+Exec=/path/to/empress server
+SystemdService=empress.service
+
+# vim:set ft=toml:

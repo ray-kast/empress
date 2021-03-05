@@ -40,7 +40,7 @@ mod mpris {
     }
 
     pub mod player {
-        use super::*;
+        use super::{lazy_static, Interface, Member};
 
         lazy_static! {
             pub static ref INTERFACE: Interface<'static> = "org.mpris.MediaPlayer2.Player".into();
@@ -147,7 +147,7 @@ impl Player {
     }
 
     async fn next(self, conn: &SyncConnection) -> Result<Self> {
-        let () = self.call(&*mpris::player::NEXT, conn).await?;
+        self.call(&*mpris::player::NEXT, conn).await?;
 
         Ok(Self {
             status: self.status,
@@ -157,7 +157,7 @@ impl Player {
     }
 
     async fn previous(self, conn: &SyncConnection) -> Result<Self> {
-        let () = self.call(&*mpris::player::PREVIOUS, conn).await?;
+        self.call(&*mpris::player::PREVIOUS, conn).await?;
 
         Ok(Self {
             status: self.status,
@@ -167,7 +167,7 @@ impl Player {
     }
 
     async fn pause(self, conn: &SyncConnection) -> Result<Self> {
-        let () = self.call(&*mpris::player::PAUSE, conn).await?;
+        self.call(&*mpris::player::PAUSE, conn).await?;
 
         Ok(Self {
             status: PlaybackStatus::Paused,
@@ -177,7 +177,7 @@ impl Player {
     }
 
     async fn stop(self, conn: &SyncConnection) -> Result<Self> {
-        let () = self.call(&*mpris::player::STOP, conn).await?;
+        self.call(&*mpris::player::STOP, conn).await?;
 
         Ok(Self {
             status: PlaybackStatus::Stopped,
@@ -187,7 +187,7 @@ impl Player {
     }
 
     async fn play(self, conn: &SyncConnection) -> Result<Self> {
-        let () = self.call(&*mpris::player::PLAY, conn).await?;
+        self.call(&*mpris::player::PLAY, conn).await?;
 
         Ok(Self {
             status: PlaybackStatus::Playing,
@@ -436,10 +436,19 @@ impl Server {
 
         let self_1 = ret.clone();
         tokio::spawn(async move {
-            while let Some(()) = scan_rx.recv().await {
-                self_1.scan(true).await.unwrap();
+            'main: while let Some(()) = scan_rx.recv().await {
+                loop {
+                    match select!(
+                        opt = scan_rx.recv() => opt.map(|()| false),
+                        () = tokio::time::sleep(Duration::from_millis(200)) => Some(true),
+                    ) {
+                        Some(true) => break,
+                        Some(false) => (),
+                        None => break 'main,
+                    }
+                }
 
-                tokio::time::sleep(Duration::from_millis(200)).await;
+                self_1.scan(true).await.unwrap();
             }
         });
 

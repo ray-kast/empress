@@ -19,7 +19,7 @@ $ cargo install empress
 ```
 
 Then launch the daemon process in order to use it — you will probably want to
-put this in an rcfile or service definition:
+put this in an rcfile (or see below for setting up a service):
 
 ```sh
 $ empress server
@@ -39,3 +39,32 @@ $ empress play-pause
 The current list of commands includes, `next`, `previous`, `pause`,
 `play-pause`, `stop`, and `play`, which all function as you would expect.  For
 more help you can always run `empress help`.
+
+## Installing `empress` as a Service
+
+`empress` can be installed as a service to allow autostarting and lifecycle
+management using D-Bus and systemd.  To do this, run the following:
+
+```sh
+$ scripts/install-services.sh -l <path to empress binary>
+```
+
+This will install the D-Bus and systemd service files into `~/.local/share`.  If
+you installed `empress` with `cargo install`, the path to the binary will
+probably look something like `/home/<user>/.cargo/bin/empress`.
+
+If you want to make a system-wide installation, simply omit the `-l` flag.  This
+will install the session service files into `/usr` instead (but note that
+`empress` **never** runs as a D-Bus system bus).
+
+### Uninstalling
+
+To remove installed service definitions, simply run:
+
+```sh
+$ scripts/install-services.sh -rl
+```
+
+Like with above, remove the `-l` to uninstall the service files from the system
+folders.
+

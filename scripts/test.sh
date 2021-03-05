@@ -4,8 +4,6 @@ set -e
 
 cd "$(dirname "$0")/.."
 
-ls
-
 cargo build --bin empress
 
 echo $'\x1b[1mStarting server...\x1b[m'
