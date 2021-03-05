@@ -19,6 +19,7 @@ use dbus::{
 };
 use dbus_crossroads::{Crossroads, IfaceBuilder};
 use dbus_tokio::connection;
+use futures::{stream::FuturesUnordered, StreamExt};
 use mpris::player::PlaybackStatus;
 use tokio::{
     select,
@@ -299,49 +300,68 @@ struct PlayerMap(
 );
 
 impl PlayerMap {
-    fn new() -> Self { Self(HashMap::new(), BTreeSet::new()) }
-
-    fn iter(&self) -> impl Iterator<Item = &Player> { self.1.iter() }
-
-    async fn inform<P: Fn(&BusName<'static>) -> PR, PR: Future<Output = Result<Player>>>(
-        &mut self,
+    async fn inform<P: Fn(&BusName<'static>) -> PR + Copy, PR: Future<Output = Result<Player>>>(
+        this: &RwLock<Self>,
+        try_patch: bool,
         names: HashSet<BusName<'static>>,
         player: P,
     ) -> Result<()> {
         use std::collections::hash_map::Entry;
 
-        let key_set = self.0.keys().cloned().collect();
+        let key_set = this.read().await.0.keys().cloned().collect();
 
-        for name in names.intersection(&key_set) {
-            let player = player(name).await?;
-            let (status, last_update) = self.0.get(name).unwrap();
+        if try_patch {
+            let vec = names
+                .intersection(&key_set)
+                .map(|n| async move { (n, player(n).await) })
+                .collect::<FuturesUnordered<_>>()
+                .collect::<Vec<_>>()
+                .await;
 
-            if player.status != *status || player.last_update < *last_update {
-                self.put(player);
+            let mut this = this.write().await;
+
+            for (name, res) in vec {
+                let player = res?;
+                let (status, last_update) = this.0.get(name).unwrap();
+
+                if player.status != *status || player.last_update < *last_update {
+                    this.put(player);
+                }
             }
-        }
 
-        for name in names.symmetric_difference(&self.0.keys().cloned().collect()) {
-            match self.0.entry(name.clone()) {
-                Entry::Vacant(v) => {
-                    let player = player(v.key()).await?;
+            for name in key_set.difference(&names) {
+                assert!(this.remove(name));
+            }
+        } else {
+            let mut this = this.write().await;
 
-                    v.insert((player.status, player.last_update));
-                    self.1.insert(player);
-                },
-                Entry::Occupied(o) => {
-                    let (bus, (status, last_update)) = o.remove_entry();
-                    assert!(self.1.remove(&Player {
-                        status,
-                        last_update,
-                        bus
-                    }));
-                },
+            for name in names.symmetric_difference(&key_set) {
+                match this.0.entry(name.clone()) {
+                    Entry::Vacant(v) => {
+                        let player = player(v.key()).await?;
+
+                        v.insert((player.status, player.last_update));
+                        this.1.insert(player);
+                    },
+                    Entry::Occupied(o) => {
+                        let (bus, (status, last_update)) = o.remove_entry();
+
+                        assert!(this.1.remove(&Player {
+                            status,
+                            last_update,
+                            bus
+                        }));
+                    },
+                }
             }
         }
 
         Ok(())
     }
+
+    fn new() -> Self { Self(HashMap::new(), BTreeSet::new()) }
+
+    fn iter(&self) -> impl Iterator<Item = &Player> { self.1.iter() }
 
     fn put(&mut self, player: Player) -> bool {
         use std::collections::hash_map::Entry;
@@ -366,12 +386,12 @@ impl PlayerMap {
         }
     }
 
-    fn drop(&mut self, bus: BusName<'static>) -> bool {
-        if let Some((status, last_update)) = self.0.remove(&bus) {
+    fn remove(&mut self, bus: &BusName<'static>) -> bool {
+        if let Some((status, last_update)) = self.0.remove(bus) {
             self.1.remove(&Player {
                 status,
                 last_update,
-                bus,
+                bus: bus.clone(),
             });
             true
         } else {
@@ -417,18 +437,18 @@ impl Server {
         let self_1 = ret.clone();
         tokio::spawn(async move {
             while let Some(()) = scan_rx.recv().await {
-                self_1.scan().await.unwrap();
+                self_1.scan(true).await.unwrap();
 
                 tokio::time::sleep(Duration::from_millis(200)).await;
             }
         });
 
-        ret.scan().await?;
+        ret.scan(false).await?;
 
         Ok(ret)
     }
 
-    async fn scan(&self) -> Result {
+    async fn scan(&self, force: bool) -> Result {
         let proxy = Proxy::new(
             "org.freedesktop.DBus",
             "/org/freedesktop/DBus",
@@ -442,18 +462,17 @@ impl Server {
             .await
             .context("failed to call ListNames")?;
 
-        self.players
-            .write()
-            .await
-            .inform(
-                names
-                    .into_iter()
-                    .filter(|n| n.starts_with(&*mpris::BUS_NAME as &str))
-                    .map(|n| n.into())
-                    .collect(),
-                |n| Player::new(now, n.clone(), &*self.conn),
-            )
-            .await?;
+        PlayerMap::inform(
+            &self.players,
+            force,
+            names
+                .into_iter()
+                .filter(|n| n.starts_with(&*mpris::BUS_NAME as &str))
+                .map(|n| n.into())
+                .collect(),
+            |n| Player::new(now, n.clone(), &*self.conn),
+        )
+        .await?;
 
         Ok(())
     }
@@ -489,7 +508,7 @@ impl Server {
     }
 
     async fn handle(&self, id: MethodId) -> Result<(), MethodErr> {
-        self.scan()
+        self.scan(false)
             .await
             .map_err(|e| method_err(e, "failed to scan for players"))?;
 
