@@ -1,6 +1,6 @@
 [package]
 name = "empress"
-version = "1.0.3"
+version = "1.1.0"
 authors = ["rookie1024 <rookie1286@gmail.com>"]
 edition = "2018"
 description = "A D-Bus MPRIS daemon for controlling media players."
