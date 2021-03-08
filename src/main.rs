@@ -110,7 +110,7 @@ enum Opts {
             long,
             parse(from_occurrences),
             conflicts_with("quiet"),
-            conflicts_with("no-quiet"),
+            conflicts_with("no-quiet")
         )]
         verbose: usize,
     },
@@ -159,10 +159,14 @@ fn run() -> Result {
     let opts = Opts::from_args();
 
     match opts {
-        Opts::Server { quiet, no_quiet, verbose } => {
+        Opts::Server {
+            quiet,
+            no_quiet,
+            verbose,
+        } => {
             let mut log_cfg = log_cfg(verbose);
 
-            if !(no_quiet || atty::is(atty::Stream::Stderr)) || quiet {
+            if !(no_quiet || verbose != 0 || atty::is(atty::Stream::Stderr)) || quiet {
                 log_cfg.filter_level(LevelFilter::Warn);
             }
 
