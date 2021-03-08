@@ -12,6 +12,7 @@ use std::{
 
 use anyhow::{Context, Error};
 use lazy_static::lazy_static;
+use log::{error, LevelFilter};
 use structopt::StructOpt;
 use tokio::runtime::Builder as RtBuilder;
 
@@ -94,7 +95,25 @@ impl Display for ControlMethodId {
 #[derive(StructOpt)]
 enum Opts {
     /// Launch a D-Bus service abstracting MPRIS players
-    Server,
+    Server {
+        /// Disable info logs (enabled by default if stderr is not a TTY)
+        #[structopt(short, long)]
+        quiet: bool,
+
+        /// Enable info logs, even if stderr is not a TTY
+        #[structopt(long, conflicts_with("quiet"))]
+        no_quiet: bool,
+
+        /// Output extra information to the console
+        #[structopt(
+            short,
+            long,
+            parse(from_occurrences),
+            conflicts_with("quiet"),
+            conflicts_with("no-quiet"),
+        )]
+        verbose: usize,
+    },
     #[structopt(flatten)]
     Client(ClientCommand),
 }
@@ -107,12 +126,27 @@ enum ClientCommand {
     Control(ControlMethodId),
 }
 
+fn log_cfg(v: usize) -> env_logger::Builder {
+    const VERBOSITY: [LevelFilter; 3] = [LevelFilter::Info, LevelFilter::Debug, LevelFilter::Trace];
+    #[cfg(debug_assertions)]
+    const DEFAULT_V: usize = 1;
+    #[cfg(not(debug_assertions))]
+    const DEFAULT_V: usize = 0;
+
+    let mut b = env_logger::builder();
+
+    b.filter_level(VERBOSITY[(DEFAULT_V + v).min(VERBOSITY.len() - 1)]);
+    b
+}
+
 fn main() {
     let result = run();
 
+    log_cfg(0).try_init().ok();
+
     match result {
         Ok(()) => (),
-        Err(e) => eprintln!("ERROR: {:?}", e),
+        Err(e) => error!("{:?}", e),
     }
 }
 
@@ -125,7 +159,21 @@ fn run() -> Result {
     let opts = Opts::from_args();
 
     match opts {
-        Opts::Server => rt.block_on(server::run()),
-        Opts::Client(id) => rt.block_on(client::run(id)),
+        Opts::Server { quiet, no_quiet, verbose } => {
+            let mut log_cfg = log_cfg(verbose);
+
+            if !(no_quiet || atty::is(atty::Stream::Stderr)) || quiet {
+                log_cfg.filter_level(LevelFilter::Warn);
+            }
+
+            log_cfg.init();
+
+            rt.block_on(server::run())
+        },
+        Opts::Client(id) => {
+            log_cfg(0).init();
+
+            rt.block_on(client::run(id))
+        },
     }
 }

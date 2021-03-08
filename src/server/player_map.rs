@@ -6,6 +6,7 @@ use std::{
 
 use dbus::strings::BusName;
 use futures::{stream::FuturesUnordered, StreamExt};
+use log::trace;
 use tokio::sync::RwLock;
 
 use super::{mpris::player::PlaybackStatus, Player};
@@ -47,6 +48,8 @@ impl PlayerMap {
 
                 if player.status != *status || player.last_update < *last_update {
                     this.put(player);
+                } else {
+                    trace!("Skipping map update for player: {:?}", player);
                 }
             }
 
@@ -61,11 +64,15 @@ impl PlayerMap {
                     Entry::Vacant(v) => {
                         let player = player(v.key()).await?;
 
+                        trace!("Quick-adding new player to map: {:?}", player);
+
                         v.insert((player.status, player.last_update));
                         this.1.insert(player);
                     },
                     Entry::Occupied(o) => {
                         let (bus, (status, last_update)) = o.remove_entry();
+
+                        trace!("Quick-removing player from map: {:?}", bus);
 
                         assert!(this.1.remove(&Player {
                             status,
@@ -84,16 +91,21 @@ impl PlayerMap {
 
     pub fn iter(&self) -> impl Iterator<Item = &Player> { self.1.iter() }
 
+    /// Always updates the map, but only returns true if a new key was inserted
     pub fn put(&mut self, player: Player) -> bool {
         use std::collections::hash_map::Entry;
 
         match self.0.entry(player.bus.clone()) {
             Entry::Vacant(v) => {
+                trace!("Inserting new player into map: {:?}", player);
+
                 v.insert((player.status, player.last_update));
                 self.1.insert(player);
                 true
             },
             Entry::Occupied(o) => {
+                trace!("Patching existing player in map: {:?}", player);
+
                 let (status, last_update) = *o.get();
                 assert!(self.1.remove(&Player {
                     status,
@@ -109,13 +121,17 @@ impl PlayerMap {
 
     pub fn remove(&mut self, bus: &BusName<'static>) -> bool {
         if let Some((status, last_update)) = self.0.remove(bus) {
-            self.1.remove(&Player {
+            trace!("Removing player from map: {:?}", bus);
+
+            assert!(self.1.remove(&Player {
                 status,
                 last_update,
                 bus: bus.clone(),
-            });
+            }));
             true
         } else {
+            trace!("Player to remove does not exist in map: {:?}", bus);
+
             false
         }
     }

@@ -5,8 +5,10 @@ use dbus::{
     arg::ReadAll,
     nonblock::{Proxy, SyncConnection},
     strings::Member,
+    MethodErr,
 };
 use dbus_tokio::connection;
+use log::{info, warn};
 use tokio::{select, sync::oneshot, task};
 
 use crate::{ClientCommand, ExtraMethodId, Result, INTERFACE_NAME, SERVER_NAME, SERVER_PATH};
@@ -61,17 +63,13 @@ async fn try_send<T: ReadAll + 'static, M: for<'a> Into<Member<'a>>>(
     let mut i = 0;
 
     loop {
-        match proxy
-            .method_call(&*INTERFACE_NAME, &method, ())
-            .await
-            .context("failed to contact empress server")
-        {
-            Err(e) if i < MAX_TRIES => eprintln!("WARNING: {:?}", e),
-            r => break r,
+        match proxy.method_call(&*INTERFACE_NAME, &method, ()).await {
+            Err(e) if i < MAX_TRIES => warn!("Request failed: {}", e),
+            r => break r.context("failed to contact empress server"),
         }
 
         i += 1;
-        eprintln!("Retry attempt {:?}", i);
+        info!("Retry attempt {}", i);
 
         tokio::time::sleep(Duration::from_millis(20)).await;
     }

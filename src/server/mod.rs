@@ -4,6 +4,7 @@ use anyhow::{Context, Error};
 use dbus::{channel::MatchingReceiver, message::MatchRule, MethodErr};
 use dbus_crossroads::{Crossroads, IfaceBuilder};
 use dbus_tokio::connection;
+use log::{error, info, warn};
 use tokio::{
     select,
     signal::{unix, unix::SignalKind},
@@ -21,8 +22,16 @@ mod server;
 pub(self) use player::Player;
 pub(self) use player_map::PlayerMap;
 
-pub(self) fn method_err(e: impl Into<Error>, msg: impl std::fmt::Display) -> MethodErr {
-    eprintln!("ERROR: {:?}", e.into().context(msg.to_string()));
+pub(self) fn method_err(
+    method: impl std::fmt::Display,
+    e: impl Into<Error>,
+    msg: impl std::fmt::Display,
+) -> MethodErr {
+    error!(
+        "Method hander for {} failed: {:?}",
+        method,
+        e.into().context(msg.to_string())
+    );
     MethodErr::failed(&msg)
 }
 
@@ -105,7 +114,7 @@ pub async fn run() -> Result {
 
             match cr.handle_message(msg, conn) {
                 Ok(()) => (),
-                Err(()) => eprintln!("WARNING: failed to handle message {}", msg_dbg),
+                Err(()) => warn!("Failed to handle message {}", msg_dbg),
             };
             true
         }),
@@ -118,7 +127,13 @@ pub async fn run() -> Result {
 
     select!(
         Some(()) = hup.recv() => Ok(()),
-        Some(()) = int.recv() => Ok(()),
+        Some(()) = int.recv() => {
+            if atty::is(atty::Stream::Stdin) && atty::is(atty::Stream::Stderr) {
+                eprintln!();
+            }
+
+            Ok(())
+        }
         Some(()) = quit.recv() => Ok(()),
         Some(()) = term.recv() => Ok(()),
         res = close_rx => Err(
@@ -126,7 +141,7 @@ pub async fn run() -> Result {
         ),
     )?;
 
-    eprintln!("Shutting down...");
+    info!("Shutting down...");
 
     Ok(())
 }

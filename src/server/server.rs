@@ -11,13 +11,14 @@ use dbus::{
     },
     MethodErr,
 };
+use log::{debug, warn};
 use tokio::{
     select,
     sync::{mpsc, RwLock},
 };
 
 use super::{method_err, mpris, Player, PlayerMap};
-use crate::{ControlMethodId, Result};
+use crate::{ControlMethodId, ExtraMethodId, Result};
 
 pub(super) struct Server {
     conn: Arc<SyncConnection>,
@@ -40,6 +41,11 @@ impl Server {
             .context("failed to listen for property changes")?
             .cb(move |_, changed: PropertiesPropertiesChanged| {
                 if changed.interface_name.as_str() != &**mpris::player::INTERFACE {
+                    debug!(
+                        "Ignoring PropertiesChanged for interface {:?}",
+                        changed.interface_name
+                    );
+
                     return true;
                 }
 
@@ -56,6 +62,8 @@ impl Server {
         let self_1 = ret.clone();
         tokio::spawn(async move {
             'main: while let Some(()) = scan_rx.recv().await {
+                debug!("Pending background scan...");
+
                 loop {
                     match select!(
                         opt = scan_rx.recv() => opt.map(|()| false),
@@ -67,7 +75,10 @@ impl Server {
                     }
                 }
 
-                self_1.scan(true).await.unwrap();
+                match self_1.scan(true).await {
+                    Ok(()) => (),
+                    Err(e) => warn!("Background scan failed: {:?}", e),
+                }
             }
         });
 
@@ -77,6 +88,8 @@ impl Server {
     }
 
     async fn scan(&self, force: bool) -> Result {
+        debug!("Running {} scan...", if force { "full" } else { "quick" });
+
         let proxy = Proxy::new(
             "org.freedesktop.DBus",
             "/org/freedesktop/DBus",
@@ -101,6 +114,8 @@ impl Server {
             |n| Player::new(now, n.clone(), &*self.conn),
         )
         .await?;
+
+        debug!("{} scan completed", if force { "Full" } else { "Quick" });
 
         Ok(())
     }
@@ -138,7 +153,7 @@ impl Server {
     pub async fn handle_list_players(&self) -> Result<(Vec<(String, String)>,), MethodErr> {
         self.scan(false)
             .await
-            .map_err(|e| method_err(e, "failed to scan for players"))?;
+            .map_err(|e| method_err(ExtraMethodId::ListPlayers, e, "failed to scan for players"))?;
 
         Ok((self
             .players
@@ -157,38 +172,40 @@ impl Server {
     pub async fn handle_control(&self, id: ControlMethodId) -> Result<(), MethodErr> {
         self.scan(false)
             .await
-            .map_err(|e| method_err(e, "failed to scan for players"))?;
+            .map_err(|e| method_err(id, e, "failed to scan for players"))?;
 
         match id {
             ControlMethodId::Next => {
                 self.process_player(|p| p.try_next(&*self.conn))
                     .await
-                    .map_err(|e| method_err(e, "attempting to go next on a player failed"))?;
+                    .map_err(|e| method_err(id, e, "attempting to go next on a player failed"))?;
             },
             ControlMethodId::Previous => {
                 self.process_player(|p| p.try_previous(&*self.conn))
                     .await
-                    .map_err(|e| method_err(e, "attempting to go previous on a player failed"))?;
+                    .map_err(|e| {
+                        method_err(id, e, "attempting to go previous on a player failed")
+                    })?;
             },
             ControlMethodId::Pause => {
                 self.process_player(|p| p.try_pause(&*self.conn))
                     .await
-                    .map_err(|e| method_err(e, "attempting to pause a player failed"))?;
+                    .map_err(|e| method_err(id, e, "attempting to pause a player failed"))?;
             },
             ControlMethodId::PlayPause => {
                 self.process_player(|p| p.try_play_pause(&*self.conn))
                     .await
-                    .map_err(|e| method_err(e, "attempting to play/pause a player failed"))?;
+                    .map_err(|e| method_err(id, e, "attempting to play/pause a player failed"))?;
             },
             ControlMethodId::Stop => {
                 self.process_player(|p| p.try_stop(&*self.conn))
                     .await
-                    .map_err(|e| method_err(e, "attempting to stop a player failed"))?;
+                    .map_err(|e| method_err(id, e, "attempting to stop a player failed"))?;
             },
             ControlMethodId::Play => {
                 self.process_player(|p| p.try_play(&*self.conn))
                     .await
-                    .map_err(|e| method_err(e, "attempting to play a player failed"))?;
+                    .map_err(|e| method_err(id, e, "attempting to play a player failed"))?;
             },
         }
 
