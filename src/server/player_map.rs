@@ -6,7 +6,7 @@ use std::{
 
 use dbus::strings::BusName;
 use futures::{stream::FuturesUnordered, StreamExt};
-use log::trace;
+use log::{trace, warn};
 use tokio::sync::RwLock;
 
 use super::{mpris::player::PlaybackStatus, Player};
@@ -27,7 +27,7 @@ impl PlayerMap {
         try_patch: bool,
         names: HashSet<BusName<'static>>,
         player: P,
-    ) -> Result<()> {
+    ) {
         use std::collections::hash_map::Entry;
 
         let key_set = this.read().await.0.keys().cloned().collect();
@@ -43,7 +43,13 @@ impl PlayerMap {
             let mut this = this.write().await;
 
             for (name, res) in vec {
-                let player = res?;
+                let player = match res {
+                    Ok(p) => p,
+                    Err(e) => {
+                        warn!("Constructing player failed: {:?}", e);
+                        continue;
+                    },
+                };
                 let (status, last_update) = this.0.get(name).unwrap();
 
                 if player.status != *status || player.last_update < *last_update {
@@ -62,7 +68,13 @@ impl PlayerMap {
             for name in names.symmetric_difference(&key_set) {
                 match this.0.entry(name.clone()) {
                     Entry::Vacant(v) => {
-                        let player = player(v.key()).await?;
+                        let player = match player(v.key()).await {
+                            Ok(p) => p,
+                            Err(e) => {
+                                warn!("Constructing player failed: {:?}", e);
+                                continue;
+                            },
+                        };
 
                         trace!("Quick-adding new player to map: {:?}", player);
 
@@ -83,8 +95,6 @@ impl PlayerMap {
                 }
             }
         }
-
-        Ok(())
     }
 
     pub fn new() -> Self { Self(HashMap::new(), BTreeSet::new()) }

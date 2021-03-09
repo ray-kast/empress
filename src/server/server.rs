@@ -113,7 +113,7 @@ impl Server {
                 .collect(),
             |n| Player::new(now, n.clone(), &*self.conn),
         )
-        .await?;
+        .await;
 
         debug!("{} scan completed", if force { "Full" } else { "Quick" });
 
