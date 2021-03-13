@@ -1,8 +1,13 @@
-use std::sync::Arc;
+use std::{future::Future, marker::PhantomData, sync::Arc};
 
 use anyhow::{Context, Error};
-use dbus::{channel::MatchingReceiver, message::MatchRule, MethodErr};
-use dbus_crossroads::{Crossroads, IfaceBuilder};
+use dbus::{
+    arg::{AppendAll, ArgAll},
+    channel::MatchingReceiver,
+    message::MatchRule,
+    MethodErr,
+};
+use dbus_crossroads::{Context as CrContext, Crossroads, IfaceBuilder};
 use dbus_tokio::connection;
 use log::{error, info, warn};
 use tokio::{
@@ -11,7 +16,7 @@ use tokio::{
     sync::oneshot,
 };
 
-use crate::{ExtraMethodId, Result, CONTROL_METHOD_IDS, INTERFACE_NAME, SERVER_NAME, SERVER_PATH};
+use crate::{MethodId, PlayerOpts, Result, INTERFACE_NAME, SERVER_NAME, SERVER_PATH};
 
 mod mpris;
 mod player;
@@ -21,6 +26,8 @@ mod server;
 
 pub(self) use player::Player;
 pub(self) use player_map::PlayerMap;
+
+pub(self) type MethodResult<T = ()> = Result<T, MethodErr>;
 
 pub(self) fn method_err(
     method: impl std::fmt::Display,
@@ -36,6 +43,104 @@ pub(self) fn method_err(
 }
 
 use server::Server;
+
+fn handle<
+    OA: ArgAll + AppendAll,
+    F: FnMut(Arc<Server>) -> R + Send + 'static,
+    R: Future<Output = MethodResult<OA>>,
+>(
+    mut ctx: CrContext,
+    cr: &mut Crossroads,
+    mut f: F,
+) -> impl Future<Output = PhantomData<OA>> {
+    let serv = cr.data_mut::<Arc<Server>>(ctx.path()).cloned();
+
+    async move {
+        let serv = match serv {
+            Some(s) => s,
+            None => return ctx.reply(Err(MethodErr::no_path(ctx.path()))),
+        };
+
+        ctx.reply(f(serv).await)
+    }
+}
+
+fn register_interface(b: &mut IfaceBuilder<Arc<Server>>) {
+    b.method_with_cr_async(
+        MethodId::ListPlayers.to_string(),
+        (),
+        ("players",),
+        |ctx, cr, ()| handle(ctx, cr, |serv| async move { serv.list_players().await }),
+    );
+
+    b.method_with_cr_async(MethodId::Next.to_string(), (), (), |ctx, cr, ()| {
+        handle(
+            ctx,
+            cr,
+            |serv| async move { serv.next(PlayerOpts {}).await },
+        )
+    });
+
+    b.method_with_cr_async(MethodId::Previous.to_string(), (), (), |ctx, cr, ()| {
+        handle(
+            ctx,
+            cr,
+            |serv| async move { serv.prev(PlayerOpts {}).await },
+        )
+    });
+
+    b.method_with_cr_async(MethodId::Pause.to_string(), (), (), |ctx, cr, ()| {
+        handle(
+            ctx,
+            cr,
+            |serv| async move { serv.pause(PlayerOpts {}).await },
+        )
+    });
+
+    b.method_with_cr_async(MethodId::PlayPause.to_string(), (), (), |ctx, cr, ()| {
+        handle(ctx, cr, |serv| async move {
+            serv.play_pause(PlayerOpts {}).await
+        })
+    });
+
+    b.method_with_cr_async(MethodId::Stop.to_string(), (), (), |ctx, cr, ()| {
+        handle(
+            ctx,
+            cr,
+            |serv| async move { serv.stop(PlayerOpts {}).await },
+        )
+    });
+
+    b.method_with_cr_async(MethodId::Play.to_string(), (), (), |ctx, cr, ()| {
+        handle(
+            ctx,
+            cr,
+            |serv| async move { serv.play(PlayerOpts {}).await },
+        )
+    });
+
+    b.method_with_cr_async(
+        MethodId::SeekRelative.to_string(),
+        ("to",),
+        ("secs",),
+        |ctx, cr, (to,)| {
+            handle(ctx, cr, move |serv| async move {
+                serv.seek_relative(PlayerOpts {}, to).await
+            })
+        },
+    );
+
+    b.method_with_cr_async(
+        MethodId::SeekAbsolute.to_string(),
+        ("to",),
+        ("secs",),
+        |ctx, cr, (to,)| {
+            handle(ctx, cr, move |serv| async move {
+                serv.seek_absolute(PlayerOpts {}, to).await
+            })
+        },
+    );
+}
 
 pub async fn run() -> Result {
     let (res, conn) = connection::new_session_sync().context("failed to connect to D-Bus")?;
@@ -60,44 +165,7 @@ pub async fn run() -> Result {
         }),
     )));
 
-    let tok = cr.register(&*INTERFACE_NAME, |b: &mut IfaceBuilder<Arc<Server>>| {
-        b.method_with_cr_async(
-            ExtraMethodId::ListPlayers.to_string(),
-            (),
-            ("players",),
-            move |mut ctx, cr, ()| {
-                let serv = cr.data_mut::<Arc<Server>>(ctx.path()).cloned();
-
-                async move {
-                    let serv = match serv {
-                        Some(s) => s,
-                        None => return ctx.reply(Err(MethodErr::no_path(ctx.path()))),
-                    };
-
-                    let res = serv.handle_list_players().await;
-
-                    ctx.reply(res)
-                }
-            },
-        );
-
-        for id in CONTROL_METHOD_IDS.iter().copied() {
-            b.method_with_cr_async(id.to_string(), (), (), move |mut ctx, cr, ()| {
-                let serv = cr.data_mut::<Arc<Server>>(ctx.path()).cloned();
-
-                async move {
-                    let serv = match serv {
-                        Some(s) => s,
-                        None => return ctx.reply(Err(MethodErr::no_path(ctx.path()))),
-                    };
-
-                    let res = serv.handle_control(id).await;
-
-                    ctx.reply(res)
-                }
-            });
-        }
-    });
+    let tok = cr.register(&*INTERFACE_NAME, register_interface);
 
     cr.insert(
         &*SERVER_PATH,

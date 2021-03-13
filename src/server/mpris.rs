@@ -20,11 +20,15 @@ pub mod player {
         pub static ref PAUSE: Member<'static> = "Pause".into();
         pub static ref STOP: Member<'static> = "Stop".into();
         pub static ref PLAY: Member<'static> = "Play".into();
+        pub static ref SET_POSITION: Member<'static> = "SetPosition".into();
         pub static ref PLAYBACK_STATUS: Member<'static> = "PlaybackStatus".into();
+        pub static ref METADATA: Member<'static> = "Metadata".into();
+        pub static ref POSITION: Member<'static> = "Position".into();
         pub static ref CAN_GO_NEXT: Member<'static> = "CanGoNext".into();
         pub static ref CAN_GO_PREVIOUS: Member<'static> = "CanGoPrevious".into();
         pub static ref CAN_PLAY: Member<'static> = "CanPlay".into();
         pub static ref CAN_PAUSE: Member<'static> = "CanPause".into();
+        pub static ref CAN_SEEK: Member<'static> = "CanSeek".into();
         pub static ref CAN_CONTROL: Member<'static> = "CanControl".into();
     }
 
@@ -57,4 +61,8 @@ pub mod player {
             })
         }
     }
+}
+
+pub mod track_list {
+    pub const ATTR_TRACKID: &str = "mpris:trackid";
 }

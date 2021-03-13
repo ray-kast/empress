@@ -1,13 +1,19 @@
-use std::time::{Duration, Instant};
-
-use anyhow::Context;
-use dbus::{
-    nonblock::{stdintf::org_freedesktop_dbus::Properties, Proxy, SyncConnection},
-    strings::{BusName, Member},
+use std::{
+    collections::HashMap,
+    fmt::Debug,
+    time::{Duration, Instant},
 };
 
+use anyhow::{anyhow, Context};
+use dbus::{
+    arg::{Append, AppendAll, Arg, Get, ReadAll, RefArg, Variant},
+    nonblock::{stdintf::org_freedesktop_dbus::Properties, Proxy, SyncConnection},
+    strings::{BusName, Member, Path},
+};
+use log::{log_enabled, trace, Level};
+
 use super::{mpris, mpris::player::PlaybackStatus};
-use crate::Result;
+use crate::{Result, SeekPosition};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct Player {
@@ -33,79 +39,152 @@ impl Player {
         Ok(ret)
     }
 
-    async fn call<T: dbus::arg::ReadAll + 'static>(
+    async fn call<A: Debug + AppendAll, T: Debug + ReadAll + 'static>(
         &self,
         method: &Member<'_>,
         conn: &SyncConnection,
+        args: A,
     ) -> Result<T> {
         let proxy = Proxy::new(&self.bus, &*mpris::ENTRY_PATH, Duration::from_secs(2), conn);
 
-        proxy
-            .method_call(&*mpris::player::INTERFACE, method, ())
+        let args_dbg = if log_enabled!(Level::Trace) {
+            Some(format!("{:?}", args))
+        } else {
+            None
+        };
+
+        let res = proxy
+            .method_call(&*mpris::player::INTERFACE, method, args)
             .await
-            .with_context(|| format!("calling {} on player {} failed", method, self.bus))
+            .with_context(|| format!("calling {} on player {} failed", method, self.bus));
+
+        if let Some(args_dbg) = args_dbg {
+            trace!(
+                "call {} on {} with {} returned {:?}",
+                method,
+                self.bus,
+                args_dbg,
+                res
+            );
+        }
+
+        res
     }
 
-    async fn get<T: for<'b> dbus::arg::Get<'b> + 'static>(
+    async fn get<T: Debug + for<'b> Get<'b> + 'static>(
         &self,
         prop: &Member<'_>,
         conn: &SyncConnection,
     ) -> Result<T> {
         let proxy = Proxy::new(&self.bus, &*mpris::ENTRY_PATH, Duration::from_secs(2), conn);
 
-        proxy
+        let res = proxy
             .get(&*mpris::player::INTERFACE, prop)
             .await
-            .with_context(|| format!("getting {} on player {} failed", prop, self.bus))
+            .with_context(|| format!("getting {} on player {} failed", prop, self.bus));
+
+        trace!("get {} on {} returned {:?}", prop, self.bus, res);
+
+        res
+    }
+
+    async fn set<T: Debug + Arg + Append>(
+        &self,
+        prop: &Member<'_>,
+        conn: &SyncConnection,
+        value: T,
+    ) -> Result<()> {
+        let proxy = Proxy::new(&self.bus, &*mpris::ENTRY_PATH, Duration::from_secs(2), conn);
+
+        let value_dbg = if log_enabled!(Level::Trace) {
+            Some(format!("{:?}", value))
+        } else {
+            None
+        };
+
+        let res = proxy
+            .set(&*mpris::player::INTERFACE, prop, value)
+            .await
+            .with_context(|| format!("setting {} on player {} failed", prop, self.bus));
+
+        if let Some(value_dbg) = value_dbg {
+            trace!(
+                "set {} on {} to {} returned {:?}",
+                prop,
+                self.bus,
+                value_dbg,
+                res
+            );
+        }
+
+        res
     }
 
     pub async fn next(self, conn: &SyncConnection) -> Result<Self> {
-        self.call(&*mpris::player::NEXT, conn).await?;
+        self.call(&*mpris::player::NEXT, conn, ()).await?;
 
         Ok(Self {
-            status: self.status,
             last_update: Instant::now(),
-            bus: self.bus,
+            ..self
         })
     }
 
     pub async fn previous(self, conn: &SyncConnection) -> Result<Self> {
-        self.call(&*mpris::player::PREVIOUS, conn).await?;
+        self.call(&*mpris::player::PREVIOUS, conn, ()).await?;
 
         Ok(Self {
-            status: self.status,
             last_update: Instant::now(),
-            bus: self.bus,
+            ..self
         })
     }
 
     pub async fn pause(self, conn: &SyncConnection) -> Result<Self> {
-        self.call(&*mpris::player::PAUSE, conn).await?;
+        self.call(&*mpris::player::PAUSE, conn, ()).await?;
 
         Ok(Self {
             status: PlaybackStatus::Paused,
             last_update: Instant::now(),
-            bus: self.bus,
+            ..self
         })
     }
 
     pub async fn stop(self, conn: &SyncConnection) -> Result<Self> {
-        self.call(&*mpris::player::STOP, conn).await?;
+        self.call(&*mpris::player::STOP, conn, ()).await?;
 
         Ok(Self {
             status: PlaybackStatus::Stopped,
             last_update: Instant::now(),
-            bus: self.bus,
+            ..self
         })
     }
 
     pub async fn play(self, conn: &SyncConnection) -> Result<Self> {
-        self.call(&*mpris::player::PLAY, conn).await?;
+        self.call(&*mpris::player::PLAY, conn, ()).await?;
 
         Ok(Self {
             status: PlaybackStatus::Playing,
             last_update: Instant::now(),
-            bus: self.bus,
+            ..self
+        })
+    }
+
+    #[allow(clippy::cast_possible_truncation)]
+    pub async fn set_position(
+        self,
+        conn: &SyncConnection,
+        id: Path<'_>,
+        secs: f64,
+    ) -> Result<Self> {
+        self.call(
+            &*mpris::player::SET_POSITION,
+            conn,
+            (id, (secs * 1e6).round() as i64),
+        )
+        .await?;
+
+        Ok(Self {
+            last_update: Instant::now(),
+            ..self
         })
     }
 
@@ -113,6 +192,20 @@ impl Player {
         self.get(&*mpris::player::PLAYBACK_STATUS, conn)
             .await
             .and_then(|s: String| s.parse())
+    }
+
+    pub async fn metadata(
+        &self,
+        conn: &SyncConnection,
+    ) -> Result<HashMap<String, Variant<Box<dyn RefArg>>>> {
+        self.get(&*mpris::player::METADATA, conn).await
+    }
+
+    #[allow(clippy::cast_precision_loss)]
+    pub async fn position(&self, conn: &SyncConnection) -> Result<f64> {
+        self.get(&*mpris::player::POSITION, conn)
+            .await
+            .map(|u: i64| u as f64 / 1e6)
     }
 
     pub async fn can_go_next(&self, conn: &SyncConnection) -> Result<bool> {
@@ -129,6 +222,10 @@ impl Player {
 
     pub async fn can_pause(&self, conn: &SyncConnection) -> Result<bool> {
         self.get(&*mpris::player::CAN_PAUSE, conn).await
+    }
+
+    pub async fn can_seek(&self, conn: &SyncConnection) -> Result<bool> {
+        self.get(&*mpris::player::CAN_SEEK, conn).await
     }
 
     pub async fn can_control(&self, conn: &SyncConnection) -> Result<bool> {
@@ -186,6 +283,41 @@ impl Player {
                 && self.can_play(conn).await?
             {
                 Some(self.play(conn).await?)
+            } else {
+                None
+            },
+        )
+    }
+
+    pub async fn try_seek(
+        self,
+        conn: &SyncConnection,
+        to: SeekPosition,
+    ) -> Result<Option<(Self, f64)>> {
+        Ok(
+            if self.can_seek(conn).await? || self.can_control(conn).await? {
+                let meta = self.metadata(conn).await?;
+
+                let pos = match to {
+                    SeekPosition::Relative(p) => self.position(conn).await? + p,
+                    SeekPosition::Absolute(p) => p,
+                };
+
+                Some((
+                    self.set_position(
+                        conn,
+                        Path::new(
+                            meta.get(mpris::track_list::ATTR_TRACKID)
+                                .ok_or_else(|| anyhow!("missing track ID in metadata"))?
+                                .as_str()
+                                .ok_or_else(|| anyhow!("track ID wasn't a string"))?,
+                        )
+                        .map_err(|s| anyhow!("track ID {:?} was not valid", s))?,
+                        pos,
+                    )
+                    .await?,
+                    pos,
+                ))
             } else {
                 None
             },

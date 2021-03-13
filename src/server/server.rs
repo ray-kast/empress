@@ -1,24 +1,25 @@
 use std::{
+    future::Future,
     sync::Arc,
     time::{Duration, Instant},
 };
 
-use anyhow::Context;
+use anyhow::{anyhow, Context};
 use dbus::{
     message::MatchRule,
     nonblock::{
         stdintf::org_freedesktop_dbus::PropertiesPropertiesChanged, MsgMatch, Proxy, SyncConnection,
     },
-    MethodErr,
 };
+use futures::prelude::*;
 use log::{debug, warn};
 use tokio::{
     select,
     sync::{mpsc, RwLock},
 };
 
-use super::{method_err, mpris, Player, PlayerMap};
-use crate::{ControlMethodId, ExtraMethodId, Result};
+use super::{method_err, mpris, MethodResult, Player, PlayerMap};
+use crate::{MethodId, PlayerOpts, Result, SeekPosition};
 
 pub(super) struct Server {
     conn: Arc<SyncConnection>,
@@ -120,96 +121,187 @@ impl Server {
         Ok(())
     }
 
-    async fn process_player<
+    async fn process_player_with<
         F: Fn(Player) -> FR,
-        FR: std::future::Future<Output = Result<Option<Player>>>,
+        FR: std::future::Future<Output = Result<Option<(Player, T)>>>,
+        T,
     >(
         &self,
         f: F,
-    ) -> Result<bool> {
+    ) -> Result<Option<T>> {
         let mut players = self.players.write().await;
-        let mut patch = None;
+        let mut patch = Err(());
 
         // TODO: use drain_filter or something less stupid than this
         for player in players.iter() {
-            if let Some(next) = f(player.clone())
-                .await
-                .context("callback failed in process_player")?
-            {
-                patch = Some(next);
-                break;
+            match f(player.clone()).await {
+                Ok(Some(next)) => {
+                    patch = Ok(Some(next));
+                    break;
+                },
+                Ok(None) => patch = Ok(None),
+                Err(e) => warn!("processing player failed: {:?}", e),
             }
         }
 
-        if let Some(next) = patch {
+        if let Some((next, ret)) = patch.map_err(|()| anyhow!("all players failed to process"))? {
             players.put(next);
 
-            return Ok(true);
+            return Ok(Some(ret));
         }
 
-        return Ok(false);
+        return Ok(None);
     }
 
-    pub async fn handle_list_players(&self) -> Result<(Vec<(String, String)>,), MethodErr> {
-        self.scan(false)
+    async fn process_player<F: Fn(Player) -> FR, FR: Future<Output = Result<Option<Player>>>>(
+        &self,
+        f: F,
+    ) -> Result<bool> {
+        self.process_player_with(|p| f(p).map_ok(|p| p.map(|p| (p, ()))))
             .await
-            .map_err(|e| method_err(ExtraMethodId::ListPlayers, e, "failed to scan for players"))?;
-
-        Ok((self
-            .players
-            .read()
-            .await
-            .iter()
-            .filter_map(|p| {
-                p.bus
-                    .strip_prefix(&**mpris::BUS_NAME)
-                    .and_then(|s| s.strip_prefix("."))
-                    .map(|s| (s.into(), p.status.to_string()))
-            })
-            .collect(),))
+            .map(|o| matches!(o, Some(())))
     }
 
-    pub async fn handle_control(&self, id: ControlMethodId) -> Result<(), MethodErr> {
+    async fn handle_method<
+        T,
+        F: FnOnce() -> FR,
+        FR: Future<Output = Result<T>>,
+        E: std::fmt::Display,
+    >(
+        &self,
+        id: MethodId,
+        f: F,
+        msg: E,
+    ) -> MethodResult<T> {
         self.scan(false)
             .await
             .map_err(|e| method_err(id, e, "failed to scan for players"))?;
 
-        match id {
-            ControlMethodId::Next => {
-                self.process_player(|p| p.try_next(&*self.conn))
-                    .await
-                    .map_err(|e| method_err(id, e, "attempting to go next on a player failed"))?;
-            },
-            ControlMethodId::Previous => {
-                self.process_player(|p| p.try_previous(&*self.conn))
-                    .await
-                    .map_err(|e| {
-                        method_err(id, e, "attempting to go previous on a player failed")
-                    })?;
-            },
-            ControlMethodId::Pause => {
-                self.process_player(|p| p.try_pause(&*self.conn))
-                    .await
-                    .map_err(|e| method_err(id, e, "attempting to pause a player failed"))?;
-            },
-            ControlMethodId::PlayPause => {
-                self.process_player(|p| p.try_play_pause(&*self.conn))
-                    .await
-                    .map_err(|e| method_err(id, e, "attempting to play/pause a player failed"))?;
-            },
-            ControlMethodId::Stop => {
-                self.process_player(|p| p.try_stop(&*self.conn))
-                    .await
-                    .map_err(|e| method_err(id, e, "attempting to stop a player failed"))?;
-            },
-            ControlMethodId::Play => {
-                self.process_player(|p| p.try_play(&*self.conn))
-                    .await
-                    .map_err(|e| method_err(id, e, "attempting to play a player failed"))?;
-            },
-        }
+        f().await.map_err(|e| method_err(id, e, msg))
+    }
 
-        Ok(())
+    pub async fn list_players(&self) -> MethodResult<(Vec<(String, String)>,)> {
+        self.handle_method(
+            MethodId::ListPlayers,
+            || async {
+                Ok((self
+                    .players
+                    .read()
+                    .await
+                    .iter()
+                    .filter_map(|p| {
+                        p.bus
+                            .strip_prefix(&**mpris::BUS_NAME)
+                            .and_then(|s| s.strip_prefix("."))
+                            .map(|s| (s.into(), p.status.to_string()))
+                    })
+                    .collect(),))
+            },
+            "failed to list players",
+        )
+        .await
+    }
+
+    pub async fn next(&self, PlayerOpts {}: PlayerOpts) -> MethodResult {
+        self.handle_method(
+            MethodId::Next,
+            || {
+                self.process_player(|p| p.try_next(&*self.conn))
+                    .map_ok(|_| ())
+            },
+            "failed to skip forward on a player",
+        )
+        .await
+    }
+
+    pub async fn prev(&self, PlayerOpts {}: PlayerOpts) -> MethodResult {
+        self.handle_method(
+            MethodId::Previous,
+            || {
+                self.process_player(|p| p.try_previous(&*self.conn))
+                    .map_ok(|_| ())
+            },
+            "failed to skip backward on a player",
+        )
+        .await
+    }
+
+    pub async fn pause(&self, PlayerOpts {}: PlayerOpts) -> MethodResult {
+        self.handle_method(
+            MethodId::Pause,
+            || {
+                self.process_player(|p| p.try_pause(&*self.conn))
+                    .map_ok(|_| ())
+            },
+            "failed to pause a player",
+        )
+        .await
+    }
+
+    pub async fn play_pause(&self, PlayerOpts {}: PlayerOpts) -> MethodResult {
+        self.handle_method(
+            MethodId::PlayPause,
+            || {
+                self.process_player(|p| p.try_play_pause(&*self.conn))
+                    .map_ok(|_| ())
+            },
+            "failed to play or pause a player",
+        )
+        .await
+    }
+
+    pub async fn stop(&self, PlayerOpts {}: PlayerOpts) -> MethodResult {
+        self.handle_method(
+            MethodId::Stop,
+            || {
+                self.process_player(|p| p.try_stop(&*self.conn))
+                    .map_ok(|_| ())
+            },
+            "failed to stop a player",
+        )
+        .await
+    }
+
+    pub async fn play(&self, PlayerOpts {}: PlayerOpts) -> MethodResult {
+        self.handle_method(
+            MethodId::Stop,
+            || {
+                self.process_player(|p| p.try_play(&*self.conn))
+                    .map_ok(|_| ())
+            },
+            "failed to play a player",
+        )
+        .await
+    }
+
+    pub async fn seek_relative(&self, PlayerOpts {}: PlayerOpts, to: f64) -> MethodResult<(f64,)> {
+        self.handle_method(
+            MethodId::SeekRelative,
+            || {
+                self.process_player_with(|p| p.try_seek(&*self.conn, SeekPosition::Relative(to)))
+                    .map(|p| {
+                        p?.ok_or_else(|| anyhow!("no players available to seek"))
+                            .map(|p| (p,))
+                    })
+            },
+            "failed to seek a player",
+        )
+        .await
+    }
+
+    pub async fn seek_absolute(&self, PlayerOpts {}: PlayerOpts, to: f64) -> MethodResult<(f64,)> {
+        self.handle_method(
+            MethodId::SeekAbsolute,
+            || {
+                self.process_player_with(|p| p.try_seek(&*self.conn, SeekPosition::Absolute(to)))
+                    .map(|p| {
+                        p?.ok_or_else(|| anyhow!("no players available to seek"))
+                            .map(|p| (p,))
+                    })
+            },
+            "failed to seek a player",
+        )
+        .await
     }
 }
 

@@ -1,5 +1,5 @@
 #![warn(missing_docs, clippy::all, clippy::pedantic, clippy::cargo)]
-#![deny(broken_intra_doc_links, missing_debug_implementations)]
+#![deny(missing_debug_implementations)]
 
 //! Binary crate for `empress`.  See [the
 //! README](https://github.com/ray-kast/empress/blob/master/README.md) for more
@@ -10,7 +10,7 @@ use std::{
     fmt::{Display, Formatter},
 };
 
-use anyhow::{Context, Error};
+use anyhow::{anyhow, Context, Error};
 use lazy_static::lazy_static;
 use log::{error, LevelFilter};
 use structopt::StructOpt;
@@ -40,14 +40,10 @@ lazy_static! {
     static ref SERVER_PATH: String = format!("{}/Daemon", *PATH_PREFIX);
 }
 
-#[derive(Debug, Clone, Copy, StructOpt)]
-enum ExtraMethodId {
+#[derive(Debug, Clone, Copy)]
+enum MethodId {
     /// List the players currently tracked by the daemon
     ListPlayers,
-}
-
-#[derive(Debug, Clone, Copy, StructOpt)]
-enum ControlMethodId {
     /// Skip one track forwards
     Next,
     /// Skip one track backwards
@@ -60,34 +56,24 @@ enum ControlMethodId {
     Stop,
     /// Play a currently-paused player
     Play,
+    /// Seek to a relative position on a player
+    SeekRelative,
+    /// Seek to an absolute position on a player
+    SeekAbsolute,
 }
 
-const CONTROL_METHOD_IDS: &[ControlMethodId] = &[
-    ControlMethodId::Next,
-    ControlMethodId::Previous,
-    ControlMethodId::Pause,
-    ControlMethodId::PlayPause,
-    ControlMethodId::Stop,
-    ControlMethodId::Play,
-];
-
-impl Display for ExtraMethodId {
+impl Display for MethodId {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
         f.write_str(match self {
             Self::ListPlayers => "ListPlayers",
-        })
-    }
-}
-
-impl Display for ControlMethodId {
-    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
-        f.write_str(match self {
             Self::Next => "Next",
             Self::Previous => "Previous",
             Self::Pause => "Pause",
             Self::PlayPause => "PlayPause",
             Self::Stop => "Stop",
             Self::Play => "Play",
+            Self::SeekRelative => "SeekRelative",
+            Self::SeekAbsolute => "SeekAbsolute",
         })
     }
 }
@@ -118,12 +104,97 @@ enum Opts {
     Client(ClientCommand),
 }
 
-#[derive(StructOpt)]
+#[derive(Debug, Clone, StructOpt)]
 enum ClientCommand {
-    #[structopt(flatten)]
-    Extra(ExtraMethodId),
-    #[structopt(flatten)]
-    Control(ControlMethodId),
+    /// List the players currently tracked by the daemon
+    ListPlayers,
+    /// Skip one track forwards
+    Next(PlayerOpts),
+    /// Skip one track backwards
+    Previous(PlayerOpts),
+    /// Pause a currently-playing player
+    Pause(PlayerOpts),
+    /// Like pause if a player is playing, otherwise like play
+    PlayPause(PlayerOpts),
+    /// Stop a currently-playing player
+    Stop(PlayerOpts),
+    /// Play a currently-paused player
+    Play(PlayerOpts),
+    /// Seek to a position on a player
+    Seek {
+        #[structopt(flatten)]
+        player: PlayerOpts,
+
+        /// The position to seek to, either absolute (e.g. 5) or relative (e.g.
+        /// +5 or -5)
+        to: SeekPosition,
+    },
+}
+
+impl ClientCommand {
+    pub fn id(&self) -> MethodId {
+        match self {
+            Self::ListPlayers => MethodId::ListPlayers,
+            Self::Next(..) => MethodId::Next,
+            Self::Previous(..) => MethodId::Previous,
+            Self::Pause(..) => MethodId::Pause,
+            Self::PlayPause(..) => MethodId::PlayPause,
+            Self::Stop(..) => MethodId::Stop,
+            Self::Play(..) => MethodId::Play,
+            Self::Seek {
+                to: SeekPosition::Relative(..),
+                ..
+            } => MethodId::SeekRelative,
+            Self::Seek {
+                to: SeekPosition::Absolute(..),
+                ..
+            } => MethodId::SeekAbsolute,
+        }
+    }
+}
+
+#[derive(Debug, Clone, StructOpt)]
+struct PlayerOpts {} // WARNING: DO NOT TOUCH WITHOUT INCREMENTING MAJOR VERSION
+
+#[derive(Debug, Clone, Copy)]
+enum SeekPosition {
+    Relative(f64),
+    Absolute(f64),
+}
+
+impl SeekPosition {
+    fn pos(&self) -> f64 {
+        *match self {
+            Self::Relative(p) | Self::Absolute(p) => p,
+        }
+    }
+}
+
+impl ::std::str::FromStr for SeekPosition {
+    type Err = anyhow::Error;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        use regex::Regex;
+
+        lazy_static! {
+            static ref SEEK_PATTERN: Regex = Regex::new(r"(\+|-)?(\d+(?:\.\d+)?)").unwrap();
+        }
+
+        if let Some(caps) = SEEK_PATTERN.captures(s) {
+            let time: f64 = caps[2]
+                .parse()
+                .context("invalid number for seek position")?;
+
+            Ok(match caps.get(1).map(|c| c.as_str()) {
+                Some("-") => SeekPosition::Relative(-time),
+                Some("+") => SeekPosition::Relative(time),
+                Some(_) => unreachable!(),
+                None => SeekPosition::Absolute(time),
+            })
+        } else {
+            Err(anyhow!("invalid format for seek position"))
+        }
+    }
 }
 
 fn log_cfg(v: usize) -> env_logger::Builder {

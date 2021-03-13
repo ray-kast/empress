@@ -2,16 +2,16 @@ use std::{sync::Arc, time::Duration};
 
 use anyhow::{Context, Error};
 use dbus::{
-    arg::ReadAll,
+    arg::{AppendAll, ReadAll},
     nonblock::{Proxy, SyncConnection},
-    strings::Member,
-    MethodErr,
 };
 use dbus_tokio::connection;
 use log::{info, warn};
 use tokio::{select, sync::oneshot, task};
 
-use crate::{ClientCommand, ExtraMethodId, Result, INTERFACE_NAME, SERVER_NAME, SERVER_PATH};
+use crate::{
+    ClientCommand, MethodId, PlayerOpts, Result, INTERFACE_NAME, SERVER_NAME, SERVER_PATH,
+};
 
 pub(super) async fn run(cmd: ClientCommand) -> Result {
     let (res, conn) = connection::new_session_sync().context("failed to connect to D-Bus")?;
@@ -26,19 +26,30 @@ pub(super) async fn run(cmd: ClientCommand) -> Result {
     let run = async move {
         let proxy = Proxy::new(&*SERVER_NAME, &*SERVER_PATH, Duration::from_secs(2), conn);
 
-        match cmd {
-            ClientCommand::Extra(e) => match e {
-                ExtraMethodId::ListPlayers => {
-                    let (players,): (Vec<(String, String)>,) =
-                        try_send(&proxy, e.to_string()).await?;
+        let id = cmd.id();
 
-                    for (player, status) in players {
-                        println!("{}\t{}", player, status);
-                    }
-                },
+        match cmd {
+            ClientCommand::Next(opts)
+            | ClientCommand::Previous(opts)
+            | ClientCommand::Pause(opts)
+            | ClientCommand::PlayPause(opts)
+            | ClientCommand::Stop(opts)
+            | ClientCommand::Play(opts) => {
+                let PlayerOpts {} = opts;
+                try_send(&proxy, id, ()).await?;
             },
-            ClientCommand::Control(c) => {
-                try_send(&proxy, c.to_string()).await?;
+            ClientCommand::ListPlayers => {
+                let (players,): (Vec<(String, String)>,) = try_send(&proxy, id, ()).await?;
+
+                for (player, status) in players {
+                    println!("{}\t{}", player, status);
+                }
+            },
+            ClientCommand::Seek {
+                player: PlayerOpts {},
+                to,
+            } => {
+                try_send(&proxy, id, (to.pos(),)).await?;
             },
         }
 
@@ -53,17 +64,21 @@ pub(super) async fn run(cmd: ClientCommand) -> Result {
     )
 }
 
-async fn try_send<T: ReadAll + 'static, M: for<'a> Into<Member<'a>>>(
+async fn try_send<R: ReadAll + 'static, A: AppendAll + Clone>(
     proxy: &Proxy<'_, Arc<SyncConnection>>,
-    method: M,
-) -> Result<T> {
+    method: MethodId,
+    args: A,
+) -> Result<R> {
     const MAX_TRIES: usize = 5;
 
-    let method = method.into();
+    let method = method.to_string();
     let mut i = 0;
 
     loop {
-        match proxy.method_call(&*INTERFACE_NAME, &method, ()).await {
+        match proxy
+            .method_call(&*INTERFACE_NAME, &method, args.clone())
+            .await
+        {
             Err(e) if i < MAX_TRIES => warn!("Request failed: {}", e),
             r => break r.context("failed to contact empress server"),
         }

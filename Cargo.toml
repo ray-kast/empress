@@ -1,6 +1,6 @@
 [package]
 name = "empress"
-version = "1.1.3"
+version = "1.2.0"
 authors = ["rookie1024 <rookie1286@gmail.com>"]
 edition = "2018"
 description = "A D-Bus MPRIS daemon for controlling media players."
@@ -21,5 +21,6 @@ env_logger = "0.8.3"
 futures = "0.3.13"
 lazy_static = "1.4.0"
 log = "0.4.14"
+regex = "1.4.4"
 structopt = "0.3.21"
 tokio = { version = "1.2.0", features = ["macros", "rt", "signal", "sync"] }
