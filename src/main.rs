@@ -60,6 +60,9 @@ enum MethodId {
     SeekRelative,
     /// Seek to an absolute position on a player
     SeekAbsolute,
+    /// Move a player to the top of the priority list, optionally pausing all
+    /// other players and playing the selected one
+    SwitchCurrent,
 }
 
 impl Display for MethodId {
@@ -74,6 +77,7 @@ impl Display for MethodId {
             Self::Play => "Play",
             Self::SeekRelative => "SeekRelative",
             Self::SeekAbsolute => "SeekAbsolute",
+            Self::SwitchCurrent => "SwitchCurrent",
         })
     }
 }
@@ -129,6 +133,16 @@ enum ClientCommand {
         /// +5 or -5)
         to: SeekPosition,
     },
+    /// Bump the priority of a specific player
+    ///
+    /// Note that if no-play is true, any players with a status of Playing will
+    /// still hold priority over the selected player.
+    SwitchCurrent {
+        to: String,
+
+        #[structopt(short, long)]
+        no_play: bool,
+    },
 }
 
 impl ClientCommand {
@@ -149,6 +163,7 @@ impl ClientCommand {
                 to: SeekPosition::Absolute(..),
                 ..
             } => MethodId::SeekAbsolute,
+            Self::SwitchCurrent { .. } => MethodId::SwitchCurrent,
         }
     }
 }

@@ -46,12 +46,12 @@ use server::Server;
 
 fn handle<
     OA: ArgAll + AppendAll,
-    F: FnMut(Arc<Server>) -> R + Send + 'static,
+    F: FnOnce(Arc<Server>) -> R + Send + 'static,
     R: Future<Output = MethodResult<OA>>,
 >(
     mut ctx: CrContext,
     cr: &mut Crossroads,
-    mut f: F,
+    f: F,
 ) -> impl Future<Output = PhantomData<OA>> {
     let serv = cr.data_mut::<Arc<Server>>(ctx.path()).cloned();
 
@@ -137,6 +137,17 @@ fn register_interface(b: &mut IfaceBuilder<Arc<Server>>) {
         |ctx, cr, (to,)| {
             handle(ctx, cr, move |serv| async move {
                 serv.seek_absolute(PlayerOpts {}, to).await
+            })
+        },
+    );
+
+    b.method_with_cr_async(
+        MethodId::SwitchCurrent.to_string(),
+        ("to", "switch_playing"),
+        (),
+        |ctx, cr, (to, switch_playing): (String, _)| {
+            handle(ctx, cr, move |serv| async move {
+                serv.switch_current(to, switch_playing).await
             })
         },
     );

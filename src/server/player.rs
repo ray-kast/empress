@@ -295,7 +295,7 @@ impl Player {
         to: SeekPosition,
     ) -> Result<Option<(Self, f64)>> {
         Ok(
-            if self.can_seek(conn).await? || self.can_control(conn).await? {
+            if self.can_seek(conn).await? {
                 let meta = self.metadata(conn).await?;
 
                 let pos = match to {

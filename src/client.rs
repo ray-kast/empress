@@ -51,6 +51,10 @@ pub(super) async fn run(cmd: ClientCommand) -> Result {
             } => {
                 try_send(&proxy, id, (to.pos(),)).await?;
             },
+            ClientCommand::SwitchCurrent { to, no_play } => {
+                let switch_playing = !no_play;
+                try_send(&proxy, id, (to, switch_playing)).await?;
+            },
         }
 
         Ok(())

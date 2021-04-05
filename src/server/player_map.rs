@@ -60,7 +60,7 @@ impl PlayerMap {
             }
 
             for name in key_set.difference(&names) {
-                assert!(this.remove(name));
+                assert!(this.remove(name).is_some());
             }
         } else {
             let mut this = this.write().await;
@@ -129,20 +129,23 @@ impl PlayerMap {
         }
     }
 
-    pub fn remove(&mut self, bus: &BusName<'static>) -> bool {
+    pub fn remove(&mut self, bus: &BusName<'static>) -> Option<Player> {
         if let Some((status, last_update)) = self.0.remove(bus) {
             trace!("Removing player from map: {:?}", bus);
 
-            assert!(self.1.remove(&Player {
+            let ply = Player {
                 status,
                 last_update,
                 bus: bus.clone(),
-            }));
-            true
+            };
+
+            assert!(self.1.remove(&ply));
+
+            Some(ply)
         } else {
             trace!("Player to remove does not exist in map: {:?}", bus);
 
-            false
+            None
         }
     }
 }

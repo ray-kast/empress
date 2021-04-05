@@ -10,6 +10,7 @@ use dbus::{
     nonblock::{
         stdintf::org_freedesktop_dbus::PropertiesPropertiesChanged, MsgMatch, Proxy, SyncConnection,
     },
+    strings::BusName,
 };
 use futures::prelude::*;
 use log::{debug, warn};
@@ -18,7 +19,7 @@ use tokio::{
     sync::{mpsc, RwLock},
 };
 
-use super::{method_err, mpris, MethodResult, Player, PlayerMap};
+use super::{method_err, mpris, mpris::player::PlaybackStatus, MethodResult, Player, PlayerMap};
 use crate::{MethodId, PlayerOpts, Result, SeekPosition};
 
 pub(super) struct Server {
@@ -300,6 +301,61 @@ impl Server {
                     })
             },
             "failed to seek a player",
+        )
+        .await
+    }
+
+    pub async fn switch_current(
+        &self,
+        to: impl std::fmt::Display,
+        switch_playing: bool,
+    ) -> MethodResult<()> {
+        self.handle_method(
+            MethodId::SwitchCurrent,
+            || async {
+                let bus = BusName::new(format!("{}.{}", *mpris::BUS_NAME, to))
+                    .map_err(|s| anyhow!("{:?} is not a valid bus name", s))?;
+
+                let curr = match self.players.write().await.remove(&bus) {
+                    Some(c) => c,
+                    None => return Err(anyhow!("no players stored with the given bus name")),
+                };
+
+                let mut curr = if switch_playing {
+                    let mut put = vec![];
+                    let conn = &*self.conn;
+
+                    for player in self.players.read().await.iter() {
+                        if player.playback_status(conn).await? == PlaybackStatus::Playing
+                            && player.can_pause(conn).await?
+                        {
+                            put.push(player.bus.clone());
+                        }
+                    }
+
+                    let mut players = self.players.write().await;
+
+                    for bus in put {
+                        let ply = players.remove(&bus).unwrap();
+
+                        ply.pause(conn)
+                            .await
+                            .context("failed to pause another player")?;
+                    }
+
+                    curr.play(conn)
+                        .await
+                        .context("failed to play selected player")?
+                } else {
+                    curr
+                };
+
+                curr.last_update = Instant::now();
+                self.players.write().await.put(curr);
+
+                Ok(())
+            },
+            "failed to switch the current player",
         )
         .await
     }
