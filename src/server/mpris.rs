@@ -5,16 +5,18 @@ use dbus::{
 use lazy_static::lazy_static;
 
 lazy_static! {
-    pub static ref BUS_NAME: BusName<'static> = "org.mpris.MediaPlayer2".into();
-    pub static ref ENTRY_PATH: Path<'static> = "/org/mpris/MediaPlayer2".into();
+    pub static ref NAME_PREFIX: String = "org.mpris.MediaPlayer2".into();
+    pub static ref PATH_PREFIX: String = "/org/mpris/MediaPlayer2".into();
+    pub static ref BUS_NAME: BusName<'static> = (&*NAME_PREFIX).into();
+    pub static ref ENTRY_PATH: Path<'static> = (&*PATH_PREFIX).into();
 }
 
 pub mod player {
-    use super::{lazy_static, Interface, Member};
+    use super::{lazy_static, Interface, Member, NAME_PREFIX};
     use crate::Result;
 
     lazy_static! {
-        pub static ref INTERFACE: Interface<'static> = "org.mpris.MediaPlayer2.Player".into();
+        pub static ref INTERFACE: Interface<'static> = format!("{}.Player", *NAME_PREFIX).into();
         pub static ref NEXT: Member<'static> = "Next".into();
         pub static ref PREVIOUS: Member<'static> = "Previous".into();
         pub static ref PAUSE: Member<'static> = "Pause".into();
@@ -64,5 +66,15 @@ pub mod player {
 }
 
 pub mod track_list {
+    use super::{lazy_static, Path};
+
     pub const ATTR_TRACKID: &str = "mpris:trackid";
+    pub const ATTR_TITLE: &str = "xesam:title";
+    pub const ATTR_ARTIST: &str = "xesam:artist";
+    pub const ATTR_ALBUM: &str = "xesam:album";
+
+    lazy_static! {
+        pub static ref PATH_PREFIX: String = format!("{}/TrackList", *super::PATH_PREFIX);
+        pub static ref NO_TRACK: Path<'static> = format!("{}/NoTrack", *PATH_PREFIX).into();
+    }
 }

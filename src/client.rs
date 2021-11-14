@@ -1,17 +1,53 @@
-use std::{sync::Arc, time::Duration};
+use std::{collections::HashMap, io, sync::Arc, time::Duration};
 
 use anyhow::{Context, Error};
 use dbus::{
-    arg::{AppendAll, ReadAll},
+    arg::{AppendAll, ReadAll, RefArg, Variant},
     nonblock::{Proxy, SyncConnection},
 };
 use dbus_tokio::connection;
 use log::{info, warn};
+use serde::Serialize;
 use tokio::{select, sync::oneshot, task};
 
 use crate::{
-    ClientCommand, MethodId, PlayerOpts, Result, INTERFACE_NAME, SERVER_NAME, SERVER_PATH,
+    server::mpris, ClientCommand, MethodId, PlayerOpts, Result, INTERFACE_NAME, SERVER_NAME,
+    SERVER_PATH,
 };
+
+#[derive(Debug, Clone, Serialize)]
+struct NowPlayingResult {
+    title: Option<String>,
+    artist: Option<Vec<String>>,
+    album: Option<String>,
+}
+
+impl TryFrom<HashMap<String, Variant<Box<dyn RefArg>>>> for NowPlayingResult {
+    type Error = Error;
+
+    fn try_from(mut map: HashMap<String, Variant<Box<dyn RefArg>>>) -> Result<Self> {
+        let title = map
+            .remove(mpris::track_list::ATTR_TITLE)
+            .and_then(|Variant(v)| v.as_str().map(ToOwned::to_owned));
+        let artist = map
+            .remove(mpris::track_list::ATTR_ARTIST)
+            .and_then(|Variant(v)| {
+                v.as_iter().map(|i| {
+                    i.filter_map(|v| v.as_str().map(ToOwned::to_owned))
+                        .collect::<Vec<_>>()
+                })
+            });
+        let album = map
+            .remove(mpris::track_list::ATTR_ALBUM)
+            .and_then(|Variant(v)| v.as_str().map(ToOwned::to_owned));
+
+        Ok(Self {
+            title,
+            artist,
+            album,
+        })
+    }
+}
 
 pub(super) async fn run(cmd: ClientCommand) -> Result {
     let (res, conn) = connection::new_session_sync().context("failed to connect to D-Bus")?;
@@ -43,6 +79,17 @@ pub(super) async fn run(cmd: ClientCommand) -> Result {
 
                 for (player, status) in players {
                     println!("{}\t{}", player, status);
+                }
+            },
+            ClientCommand::NowPlaying(opts) => {
+                let PlayerOpts {} = opts;
+                let (map,): (HashMap<String, Variant<Box<dyn RefArg>>>,) =
+                    try_send(&proxy, id, ()).await?;
+
+                serde_json::to_writer(io::stdout(), &NowPlayingResult::try_from(map)?)?;
+
+                if atty::is(atty::Stream::Stdout) {
+                    println!();
                 }
             },
             ClientCommand::Seek {

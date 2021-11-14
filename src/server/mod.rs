@@ -18,7 +18,7 @@ use tokio::{
 
 use crate::{MethodId, PlayerOpts, Result, INTERFACE_NAME, SERVER_NAME, SERVER_PATH};
 
-mod mpris;
+pub mod mpris;
 mod player;
 mod player_map;
 #[allow(clippy::module_inception)] // I'm aware, but the struct is called Server
@@ -71,6 +71,13 @@ fn register_interface(b: &mut IfaceBuilder<Arc<Server>>) {
         (),
         ("players",),
         |ctx, cr, ()| handle(ctx, cr, |serv| async move { serv.list_players().await }),
+    );
+
+    b.method_with_cr_async(
+        MethodId::NowPlaying.to_string(),
+        (),
+        ("info",),
+        |ctx, cr, ()| handle(ctx, cr, |serv| async move { serv.now_playing().await }),
     );
 
     b.method_with_cr_async(MethodId::Next.to_string(), (), (), |ctx, cr, ()| {

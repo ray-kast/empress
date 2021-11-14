@@ -294,34 +294,32 @@ impl Player {
         conn: &SyncConnection,
         to: SeekPosition,
     ) -> Result<Option<(Self, f64)>> {
-        Ok(
-            if self.can_seek(conn).await? {
-                let meta = self.metadata(conn).await?;
+        Ok(if self.can_seek(conn).await? {
+            let meta = self.metadata(conn).await?;
 
-                let pos = match to {
-                    SeekPosition::Relative(p) => self.position(conn).await? + p,
-                    SeekPosition::Absolute(p) => p,
-                };
+            let pos = match to {
+                SeekPosition::Relative(p) => self.position(conn).await? + p,
+                SeekPosition::Absolute(p) => p,
+            };
 
-                Some((
-                    self.set_position(
-                        conn,
-                        Path::new(
-                            meta.get(mpris::track_list::ATTR_TRACKID)
-                                .ok_or_else(|| anyhow!("missing track ID in metadata"))?
-                                .as_str()
-                                .ok_or_else(|| anyhow!("track ID wasn't a string"))?,
-                        )
-                        .map_err(|s| anyhow!("track ID {:?} was not valid", s))?,
-                        pos,
+            Some((
+                self.set_position(
+                    conn,
+                    Path::new(
+                        meta.get(mpris::track_list::ATTR_TRACKID)
+                            .ok_or_else(|| anyhow!("missing track ID in metadata"))?
+                            .as_str()
+                            .ok_or_else(|| anyhow!("track ID wasn't a string"))?,
                     )
-                    .await?,
+                    .map_err(|s| anyhow!("track ID {:?} was not valid", s))?,
                     pos,
-                ))
-            } else {
-                None
-            },
-        )
+                )
+                .await?,
+                pos,
+            ))
+        } else {
+            None
+        })
     }
 }
 

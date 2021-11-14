@@ -1,5 +1,10 @@
-#![warn(missing_docs, clippy::all, clippy::pedantic, clippy::cargo)]
-#![deny(missing_debug_implementations)]
+#![deny(
+    clippy::suspicious,
+    clippy::style,
+    missing_debug_implementations,
+    missing_copy_implementations
+)]
+#![warn(clippy::pedantic, clippy::cargo, missing_docs)]
 
 //! Binary crate for `empress`.  See [the
 //! README](https://github.com/ray-kast/empress/blob/master/README.md) for more
@@ -46,6 +51,8 @@ enum MethodId {
     ListPlayers,
     /// Skip one track forwards
     Next,
+    /// Print information about the current track
+    NowPlaying,
     /// Skip one track backwards
     Previous,
     /// Pause a currently-playing player
@@ -70,6 +77,7 @@ impl Display for MethodId {
         f.write_str(match self {
             Self::ListPlayers => "ListPlayers",
             Self::Next => "Next",
+            Self::NowPlaying => "NowPlaying",
             Self::Previous => "Previous",
             Self::Pause => "Pause",
             Self::PlayPause => "PlayPause",
@@ -114,6 +122,8 @@ enum ClientCommand {
     ListPlayers,
     /// Skip one track forwards
     Next(PlayerOpts),
+    /// Print information about the current track
+    NowPlaying(PlayerOpts),
     /// Skip one track backwards
     Previous(PlayerOpts),
     /// Pause a currently-playing player
@@ -150,6 +160,7 @@ impl ClientCommand {
         match self {
             Self::ListPlayers => MethodId::ListPlayers,
             Self::Next(..) => MethodId::Next,
+            Self::NowPlaying { .. } => MethodId::NowPlaying,
             Self::Previous(..) => MethodId::Previous,
             Self::Pause(..) => MethodId::Pause,
             Self::PlayPause(..) => MethodId::PlayPause,

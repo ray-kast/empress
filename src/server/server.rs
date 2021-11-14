@@ -1,4 +1,5 @@
 use std::{
+    collections::HashMap,
     future::Future,
     sync::Arc,
     time::{Duration, Instant},
@@ -6,11 +7,12 @@ use std::{
 
 use anyhow::{anyhow, Context};
 use dbus::{
+    arg::{ArgType, RefArg, Variant},
     message::MatchRule,
     nonblock::{
         stdintf::org_freedesktop_dbus::PropertiesPropertiesChanged, MsgMatch, Proxy, SyncConnection,
     },
-    strings::BusName,
+    strings::{BusName, Path},
 };
 use futures::prelude::*;
 use log::{debug, warn};
@@ -111,7 +113,7 @@ impl Server {
             names
                 .into_iter()
                 .filter(|n| n.starts_with(&**mpris::BUS_NAME))
-                .map(|n| n.into())
+                .map(Into::into)
                 .collect(),
             |n| Player::new(now, n.clone(), &*self.conn),
         )
@@ -124,7 +126,7 @@ impl Server {
 
     async fn process_player_with<
         F: Fn(Player) -> FR,
-        FR: std::future::Future<Output = Result<Option<(Player, T)>>>,
+        FR: Future<Output = Result<Option<(Player, T)>>>,
         T,
     >(
         &self,
@@ -151,7 +153,29 @@ impl Server {
             return Ok(Some(ret));
         }
 
-        return Ok(None);
+        Ok(None)
+    }
+
+    async fn peek_player_with<F: Fn(Player) -> FR, FR: Future<Output = Result<Option<T>>>, T>(
+        &self,
+        f: F,
+    ) -> Result<Option<T>> {
+        let players = self.players.read().await;
+        let mut any_ok = false;
+
+        for player in players.iter() {
+            match f(player.clone()).await {
+                ok @ Ok(Some(_)) => return ok,
+                Ok(None) => any_ok = true,
+                Err(e) => warn!("peeking player failed: {:?}", e),
+            }
+        }
+
+        if any_ok {
+            Ok(None)
+        } else {
+            Err(anyhow!("all players failed to peek"))
+        }
     }
 
     async fn process_player<F: Fn(Player) -> FR, FR: Future<Output = Result<Option<Player>>>>(
@@ -193,12 +217,51 @@ impl Server {
                     .filter_map(|p| {
                         p.bus
                             .strip_prefix(&**mpris::BUS_NAME)
-                            .and_then(|s| s.strip_prefix("."))
+                            .and_then(|s| s.strip_prefix('.'))
                             .map(|s| (s.into(), p.status.to_string()))
                     })
                     .collect(),))
             },
             "failed to list players",
+        )
+        .await
+    }
+
+    pub async fn now_playing(&self) -> MethodResult<(HashMap<String, Variant<Box<dyn RefArg>>>,)> {
+        self.handle_method(
+            MethodId::NowPlaying,
+            || {
+                self.peek_player_with(|p| async move {
+                    let meta = p.metadata(&*self.conn).await?;
+
+                    let has_track =
+                        meta.get(mpris::track_list::ATTR_TRACKID)
+                            .map_or(false, |Variant(v)| {
+                                !(v.arg_type() == ArgType::ObjectPath
+                                    && v.as_str()
+                                        .and_then(|s| {
+                                            Path::new(s)
+                                                .map_err(|e| {
+                                                    warn!("Failed to parse MPRIS trackid: {:?}", e);
+                                                })
+                                                .ok()
+                                        })
+                                        .map_or(false, |p| p == *mpris::track_list::NO_TRACK))
+                            });
+
+                    Ok(if has_track {
+                        Some(
+                            meta.into_iter()
+                                .map(|(k, Variant(v))| (k, Variant(v.box_clone())))
+                                .collect(),
+                        )
+                    } else {
+                        None
+                    })
+                })
+                .map_ok(|m| (m.unwrap_or_else(HashMap::new),))
+            },
+            "failed to get current track info",
         )
         .await
     }
