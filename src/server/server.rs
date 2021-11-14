@@ -136,7 +136,7 @@ impl Server {
         f: F,
     ) -> Result<Option<T>> {
         let mut players = self.players.write().await;
-        let mut patch = Err(());
+        let mut patch = Err(None);
 
         // TODO: use drain_filter or something less stupid than this
         for player in players.iter() {
@@ -146,11 +146,16 @@ impl Server {
                     break;
                 },
                 Ok(None) => patch = Ok(None),
-                Err(e) => warn!("processing player failed: {:?}", e),
+                Err(e) => {
+                    warn!("processing player failed: {:?}", e);
+                    patch = patch.map_err(|_| Some(()));
+                },
             }
         }
 
-        if let Some((next, ret)) = patch.map_err(|()| anyhow!("all players failed to process"))? {
+        if let Some((next, ret)) = patch
+            .or_else(|e| e.map_or(Ok(None), |()| Err(anyhow!("all players failed to process"))))?
+        {
             players.put(next);
 
             return Ok(Some(ret));
@@ -164,21 +169,20 @@ impl Server {
         f: F,
     ) -> Result<Option<T>> {
         let players = self.players.read().await;
-        let mut any_ok = false;
+        let mut default = Err(None);
 
         for player in players.iter() {
             match f(player.clone()).await {
                 ok @ Ok(Some(_)) => return ok,
-                Ok(None) => any_ok = true,
-                Err(e) => warn!("peeking player failed: {:?}", e),
+                Ok(None) => default = Ok(None),
+                Err(e) => {
+                    warn!("peeking player failed: {:?}", e);
+                    default = default.map_err(|_| Some(()));
+                },
             }
         }
 
-        if any_ok {
-            Ok(None)
-        } else {
-            Err(anyhow!("all players failed to peek"))
-        }
+        default.or_else(|e| e.map_or(Ok(None), |()| Err(anyhow!("all players failed to peek"))))
     }
 
     async fn process_player<F: Fn(Player) -> FR, FR: Future<Output = Result<Option<Player>>>>(
