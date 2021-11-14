@@ -1,8 +1,8 @@
-use std::{future::Future, marker::PhantomData, sync::Arc};
+use std::{collections::HashMap, future::Future, marker::PhantomData, sync::Arc};
 
 use anyhow::{Context, Error};
 use dbus::{
-    arg::{AppendAll, ArgAll},
+    arg::{AppendAll, ArgAll, RefArg, Variant},
     channel::MatchingReceiver,
     message::MatchRule,
     MethodErr,
@@ -23,6 +23,8 @@ mod player;
 mod player_map;
 #[allow(clippy::module_inception)] // I'm aware, but the struct is called Server
 mod server;
+
+pub type NowPlayingResponse = (HashMap<String, Variant<Box<dyn RefArg>>>, String);
 
 pub(self) use player::Player;
 pub(self) use player_map::PlayerMap;
@@ -76,7 +78,7 @@ fn register_interface(b: &mut IfaceBuilder<Arc<Server>>) {
     b.method_with_cr_async(
         MethodId::NowPlaying.to_string(),
         (),
-        ("info",),
+        ("meta", "status"),
         |ctx, cr, ()| handle(ctx, cr, |serv| async move { serv.now_playing().await }),
     );
 

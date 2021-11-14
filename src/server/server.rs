@@ -21,7 +21,10 @@ use tokio::{
     sync::{mpsc, RwLock},
 };
 
-use super::{method_err, mpris, mpris::player::PlaybackStatus, MethodResult, Player, PlayerMap};
+use super::{
+    method_err, mpris, mpris::player::PlaybackStatus, MethodResult, NowPlayingResponse, Player,
+    PlayerMap,
+};
 use crate::{MethodId, PlayerOpts, Result, SeekPosition};
 
 pub(super) struct Server {
@@ -227,7 +230,7 @@ impl Server {
         .await
     }
 
-    pub async fn now_playing(&self) -> MethodResult<(HashMap<String, Variant<Box<dyn RefArg>>>,)> {
+    pub async fn now_playing(&self) -> MethodResult<NowPlayingResponse> {
         self.handle_method(
             MethodId::NowPlaying,
             || {
@@ -250,16 +253,22 @@ impl Server {
                             });
 
                     Ok(if has_track {
-                        Some(
+                        Some((
                             meta.into_iter()
                                 .map(|(k, Variant(v))| (k, Variant(v.box_clone())))
                                 .collect(),
-                        )
+                            p.status,
+                        ))
                     } else {
                         None
                     })
                 })
-                .map_ok(|m| (m.unwrap_or_else(HashMap::new),))
+                .map_ok(|ok| {
+                    let (map, status) =
+                        ok.unwrap_or_else(|| (HashMap::new(), PlaybackStatus::Stopped));
+
+                    (map, status.to_string())
+                })
             },
             "failed to get current track info",
         )

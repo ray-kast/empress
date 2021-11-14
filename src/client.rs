@@ -1,4 +1,4 @@
-use std::{collections::HashMap, io, sync::Arc, time::Duration};
+use std::{io, sync::Arc, time::Duration};
 
 use anyhow::{Context, Error};
 use dbus::{
@@ -11,21 +11,22 @@ use serde::Serialize;
 use tokio::{select, sync::oneshot, task};
 
 use crate::{
-    server::mpris, ClientCommand, MethodId, PlayerOpts, Result, INTERFACE_NAME, SERVER_NAME,
-    SERVER_PATH,
+    server::{mpris, mpris::player::PlaybackStatus, NowPlayingResponse},
+    ClientCommand, MethodId, PlayerOpts, Result, INTERFACE_NAME, SERVER_NAME, SERVER_PATH,
 };
 
 #[derive(Debug, Clone, Serialize)]
 struct NowPlayingResult {
+    status: String,
     title: Option<String>,
     artist: Option<Vec<String>>,
     album: Option<String>,
 }
 
-impl TryFrom<HashMap<String, Variant<Box<dyn RefArg>>>> for NowPlayingResult {
+impl TryFrom<NowPlayingResponse> for NowPlayingResult {
     type Error = Error;
 
-    fn try_from(mut map: HashMap<String, Variant<Box<dyn RefArg>>>) -> Result<Self> {
+    fn try_from((mut map, status): NowPlayingResponse) -> Result<Self> {
         let title = map
             .remove(mpris::track_list::ATTR_TITLE)
             .and_then(|Variant(v)| v.as_str().map(ToOwned::to_owned));
@@ -41,7 +42,10 @@ impl TryFrom<HashMap<String, Variant<Box<dyn RefArg>>>> for NowPlayingResult {
             .remove(mpris::track_list::ATTR_ALBUM)
             .and_then(|Variant(v)| v.as_str().map(ToOwned::to_owned));
 
+        let _: PlaybackStatus = status.parse()?;
+
         Ok(Self {
+            status,
             title,
             artist,
             album,
@@ -83,10 +87,9 @@ pub(super) async fn run(cmd: ClientCommand) -> Result {
             },
             ClientCommand::NowPlaying(opts) => {
                 let PlayerOpts {} = opts;
-                let (map,): (HashMap<String, Variant<Box<dyn RefArg>>>,) =
-                    try_send(&proxy, id, ()).await?;
+                let resp: NowPlayingResponse = try_send(&proxy, id, ()).await?;
 
-                serde_json::to_writer(io::stdout(), &NowPlayingResult::try_from(map)?)?;
+                serde_json::to_writer(io::stdout(), &NowPlayingResult::try_from(resp)?)?;
 
                 if atty::is(atty::Stream::Stdout) {
                     println!();
