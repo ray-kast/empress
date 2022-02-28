@@ -16,9 +16,9 @@ use std::{
 };
 
 use anyhow::{anyhow, Context, Error};
+use clap::Parser;
 use lazy_static::lazy_static;
 use log::{error, LevelFilter};
-use structopt::StructOpt;
 use tokio::runtime::Builder as RtBuilder;
 
 mod client;
@@ -45,7 +45,7 @@ lazy_static! {
     static ref SERVER_PATH: String = format!("{}/Daemon", *PATH_PREFIX);
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, strum::Display)]
 enum MethodId {
     /// List the players currently tracked by the daemon
     ListPlayers,
@@ -67,43 +67,29 @@ enum MethodId {
     SeekRelative,
     /// Seek to an absolute position on a player
     SeekAbsolute,
+    /// Set a player's volume relative to its current volume
+    VolRelative,
+    /// Set a player's volume to an absolute value
+    VolAbsolute,
     /// Move a player to the top of the priority list, optionally pausing all
     /// other players and playing the selected one
     SwitchCurrent,
 }
 
-impl Display for MethodId {
-    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
-        f.write_str(match self {
-            Self::ListPlayers => "ListPlayers",
-            Self::Next => "Next",
-            Self::NowPlaying => "NowPlaying",
-            Self::Previous => "Previous",
-            Self::Pause => "Pause",
-            Self::PlayPause => "PlayPause",
-            Self::Stop => "Stop",
-            Self::Play => "Play",
-            Self::SeekRelative => "SeekRelative",
-            Self::SeekAbsolute => "SeekAbsolute",
-            Self::SwitchCurrent => "SwitchCurrent",
-        })
-    }
-}
-
-#[derive(StructOpt)]
+#[derive(Parser)]
 enum Opts {
     /// Launch a D-Bus service abstracting MPRIS players
     Server {
         /// Disable info logs (enabled by default if stderr is not a TTY)
-        #[structopt(short, long)]
+        #[clap(short, long)]
         quiet: bool,
 
         /// Enable info logs, even if stderr is not a TTY
-        #[structopt(long, conflicts_with("quiet"))]
+        #[clap(long, conflicts_with("quiet"))]
         no_quiet: bool,
 
         /// Output extra information to the console
-        #[structopt(
+        #[clap(
             short,
             long,
             parse(from_occurrences),
@@ -112,11 +98,11 @@ enum Opts {
         )]
         verbose: usize,
     },
-    #[structopt(flatten)]
+    #[clap(flatten)]
     Client(ClientCommand),
 }
 
-#[derive(Debug, Clone, StructOpt)]
+#[derive(Debug, Clone, Parser)]
 enum ClientCommand {
     /// List the players currently tracked by the daemon
     ListPlayers,
@@ -136,21 +122,37 @@ enum ClientCommand {
     Play(PlayerOpts),
     /// Seek to a position on a player
     Seek {
-        #[structopt(flatten)]
+        #[clap(flatten)]
         player: PlayerOpts,
 
         /// The position to seek to, either absolute (e.g. 5) or relative (e.g.
-        /// +5 or -5)
-        to: SeekPosition,
+        /// 5+ or 5-)
+        to: Offset,
+    },
+    /// Get or set the volume on a player
+    Volume {
+        #[clap(flatten)]
+        player: PlayerOpts,
+
+        /// The volume as a number between 0.0 and 1.0, either absolute (e.g.
+        /// 0.5) or relative (e.g. 0.1+ or 0.1-).  If no value is given
+        /// the current volume is simply printed instead.
+        #[clap(default_value_t = Offset::Relative(0.0))]
+        vol: Offset,
     },
     /// Bump the priority of a specific player
     ///
-    /// Note that if no-play is true, any players with a status of Playing will
-    /// still hold priority over the selected player.
+    /// Note that if --no-play is passed, any players with a status of Playing
+    /// will still hold priority over the selected player.
     SwitchCurrent {
+        /// The player ID to switch to.  For a list of valid players see the
+        /// list-players subcommand.
         to: String,
 
-        #[structopt(short, long)]
+        /// By default switch-current will pause any currently running players
+        /// and play the selected player.  Pass this flag to disable
+        /// this behavior.
+        #[clap(short, long)]
         no_play: bool,
     },
 }
@@ -167,55 +169,75 @@ impl ClientCommand {
             Self::Stop(..) => MethodId::Stop,
             Self::Play(..) => MethodId::Play,
             Self::Seek {
-                to: SeekPosition::Relative(..),
+                to: Offset::Relative(..),
                 ..
             } => MethodId::SeekRelative,
             Self::Seek {
-                to: SeekPosition::Absolute(..),
+                to: Offset::Absolute(..),
                 ..
             } => MethodId::SeekAbsolute,
+            Self::Volume {
+                vol: Offset::Relative(..),
+                ..
+            } => MethodId::VolRelative,
+            Self::Volume {
+                vol: Offset::Absolute(..),
+                ..
+            } => MethodId::VolAbsolute,
             Self::SwitchCurrent { .. } => MethodId::SwitchCurrent,
         }
     }
 }
 
-#[derive(Debug, Clone, StructOpt)]
+#[derive(Debug, Clone, Parser)]
 struct PlayerOpts {} // WARNING: DO NOT TOUCH WITHOUT INCREMENTING MAJOR VERSION
 
 #[derive(Debug, Clone, Copy)]
-enum SeekPosition {
+enum Offset {
     Relative(f64),
     Absolute(f64),
 }
 
-impl SeekPosition {
-    fn pos(&self) -> f64 {
+impl Offset {
+    fn offset(&self) -> f64 {
         *match self {
-            Self::Relative(p) | Self::Absolute(p) => p,
+            Self::Relative(o) | Self::Absolute(o) => o,
         }
     }
 }
 
-impl ::std::str::FromStr for SeekPosition {
+impl Display for Offset {
+    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+        let offs = self.offset();
+        assert!(offs.is_sign_positive());
+        write!(f, "{}", offs)?;
+
+        if matches!(self, Self::Relative(..)) {
+            f.write_str(if offs.is_sign_negative() { "-" } else { "+" })?;
+        }
+
+        Ok(())
+    }
+}
+
+impl ::std::str::FromStr for Offset {
     type Err = anyhow::Error;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         use regex::Regex;
 
         lazy_static! {
-            static ref SEEK_PATTERN: Regex = Regex::new(r"(\+|-)?(\d+(?:\.\d+)?)").unwrap();
+            static ref SEEK_PATTERN: Regex = Regex::new(r"(\d*(?:\.\d+)?)(\+|-)?").unwrap();
         }
 
         if let Some(caps) = SEEK_PATTERN.captures(s) {
-            let time: f64 = caps[2]
-                .parse()
-                .context("invalid number for seek position")?;
+            let time: f64 = caps[1].parse().context("invalid number for offset")?;
 
-            Ok(match caps.get(1).map(|c| c.as_str()) {
-                Some("-") => SeekPosition::Relative(-time),
-                Some("+") => SeekPosition::Relative(time),
+            Ok(match caps.get(2).map(|c| c.as_str()) {
+                Some("-") => Offset::Relative(-time),
+                Some("+") => Offset::Relative(time),
                 Some(_) => unreachable!(),
-                None => SeekPosition::Absolute(time),
+                None => Offset::Absolute(time),
             })
         } else {
             Err(anyhow!("invalid format for seek position"))
@@ -232,7 +254,9 @@ fn log_cfg(v: usize) -> env_logger::Builder {
 
     let mut b = env_logger::builder();
 
-    b.filter_level(VERBOSITY[(DEFAULT_V + v).min(VERBOSITY.len() - 1)]);
+    b.filter_level(VERBOSITY[(DEFAULT_V + v).min(VERBOSITY.len() - 1)])
+        .parse_default_env();
+
     b
 }
 
@@ -253,7 +277,7 @@ fn run() -> Result {
         .build()
         .context("failed to start runtime")?;
 
-    let opts = Opts::from_args();
+    let opts = Opts::parse();
 
     match opts {
         Opts::Server {

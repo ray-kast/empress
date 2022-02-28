@@ -25,7 +25,7 @@ use super::{
     method_err, mpris, mpris::player::PlaybackStatus, MethodResult, NowPlayingResponse, Player,
     PlayerMap,
 };
-use crate::{MethodId, PlayerOpts, Result, SeekPosition};
+use crate::{MethodId, Offset, PlayerOpts, Result};
 
 pub(super) struct Server {
     conn: Arc<SyncConnection>,
@@ -355,7 +355,7 @@ impl Server {
         self.handle_method(
             MethodId::SeekRelative,
             || {
-                self.process_player_with(|p| p.try_seek(&*self.conn, SeekPosition::Relative(to)))
+                self.process_player_with(|p| p.try_seek(&*self.conn, Offset::Relative(to)))
                     .map(|p| {
                         p?.ok_or_else(|| anyhow!("no players available to seek"))
                             .map(|p| (p,))
@@ -370,13 +370,43 @@ impl Server {
         self.handle_method(
             MethodId::SeekAbsolute,
             || {
-                self.process_player_with(|p| p.try_seek(&*self.conn, SeekPosition::Absolute(to)))
+                self.process_player_with(|p| p.try_seek(&*self.conn, Offset::Absolute(to)))
                     .map(|p| {
                         p?.ok_or_else(|| anyhow!("no players available to seek"))
                             .map(|p| (p,))
                     })
             },
             "failed to seek a player",
+        )
+        .await
+    }
+
+    pub async fn vol_relative(&self, PlayerOpts {}: PlayerOpts, to: f64) -> MethodResult<(f64,)> {
+        self.handle_method(
+            MethodId::VolRelative,
+            || {
+                self.process_player_with(|p| p.try_set_volume(&*self.conn, Offset::Relative(to)))
+                    .map(|p| {
+                        p?.ok_or_else(|| anyhow!("no players available to get/adjust volume"))
+                            .map(|p| (p,))
+                    })
+            },
+            "failed to get/adjust a player's volume",
+        )
+        .await
+    }
+
+    pub async fn vol_absolute(&self, PlayerOpts {}: PlayerOpts, to: f64) -> MethodResult<(f64,)> {
+        self.handle_method(
+            MethodId::VolAbsolute,
+            || {
+                self.process_player_with(|p| p.try_set_volume(&*self.conn, Offset::Absolute(to)))
+                    .map(|p| {
+                        p?.ok_or_else(|| anyhow!("no players available to set volume"))
+                            .map(|p| (p,))
+                    })
+            },
+            "failed to set a player's volume",
         )
         .await
     }

@@ -1,3 +1,5 @@
+#![allow(clippy::needless_borrow)] // Clippy bug
+
 use dbus::{
     strings::{BusName, Interface, Member},
     Path,
@@ -25,6 +27,7 @@ pub mod player {
         pub static ref SET_POSITION: Member<'static> = "SetPosition".into();
         pub static ref PLAYBACK_STATUS: Member<'static> = "PlaybackStatus".into();
         pub static ref METADATA: Member<'static> = "Metadata".into();
+        pub static ref VOLUME: Member<'static> = "Volume".into();
         pub static ref POSITION: Member<'static> = "Position".into();
         pub static ref CAN_GO_NEXT: Member<'static> = "CanGoNext".into();
         pub static ref CAN_GO_PREVIOUS: Member<'static> = "CanGoPrevious".into();

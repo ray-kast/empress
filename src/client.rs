@@ -99,7 +99,19 @@ pub(super) async fn run(cmd: ClientCommand) -> Result {
                 player: PlayerOpts {},
                 to,
             } => {
-                try_send(&proxy, id, (to.pos(),)).await?;
+                try_send(&proxy, id, (to.offset(),)).await?;
+            },
+            ClientCommand::Volume {
+                player: PlayerOpts {},
+                vol,
+            } => {
+                let (vol,): (f64,) = try_send(&proxy, id, (vol.offset(),)).await?;
+
+                print!("{}", vol);
+
+                if atty::is(atty::Stream::Stdout) {
+                    println!();
+                }
             },
             ClientCommand::SwitchCurrent { to, no_play } => {
                 let switch_playing = !no_play;

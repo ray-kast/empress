@@ -13,7 +13,7 @@ use dbus::{
 use log::{log_enabled, trace, Level};
 
 use super::{mpris, mpris::player::PlaybackStatus};
-use crate::{Result, SeekPosition};
+use crate::{Offset, Result};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct Player {
@@ -201,6 +201,14 @@ impl Player {
         self.get(&*mpris::player::METADATA, conn).await
     }
 
+    pub async fn volume(&self, conn: &SyncConnection) -> Result<f64> {
+        self.get(&*mpris::player::VOLUME, conn).await
+    }
+
+    pub async fn set_volume(&self, conn: &SyncConnection, vol: f64) -> Result<()> {
+        self.set(&*mpris::player::VOLUME, conn, vol).await
+    }
+
     #[allow(clippy::cast_precision_loss)]
     pub async fn position(&self, conn: &SyncConnection) -> Result<f64> {
         self.get(&*mpris::player::POSITION, conn)
@@ -289,17 +297,13 @@ impl Player {
         )
     }
 
-    pub async fn try_seek(
-        self,
-        conn: &SyncConnection,
-        to: SeekPosition,
-    ) -> Result<Option<(Self, f64)>> {
+    pub async fn try_seek(self, conn: &SyncConnection, to: Offset) -> Result<Option<(Self, f64)>> {
         Ok(if self.can_seek(conn).await? {
             let meta = self.metadata(conn).await?;
 
             let pos = match to {
-                SeekPosition::Relative(p) => self.position(conn).await? + p,
-                SeekPosition::Absolute(p) => p,
+                Offset::Relative(p) => self.position(conn).await? + p,
+                Offset::Absolute(p) => p,
             };
 
             Some((
@@ -319,6 +323,45 @@ impl Player {
             ))
         } else {
             None
+        })
+    }
+
+    pub async fn try_set_volume(
+        self,
+        conn: &SyncConnection,
+        vol: Offset,
+    ) -> Result<Option<(Self, f64)>> {
+        let (vol, set) = match vol {
+            Offset::Relative(v) => {
+                let prev = self.volume(conn).await?;
+                let next = prev + v;
+
+                if (next - prev).abs() > 1e-5 {
+                    (next, true)
+                } else {
+                    (prev, false)
+                }
+            },
+            Offset::Absolute(v) => (v, true),
+        };
+
+        if !vol.is_finite() {
+            return Err(anyhow!("Invalid volume {:?}", vol));
+        }
+
+        Ok(if set {
+            if self.can_control(conn).await? {
+                // Safety check
+                let vol = vol.max(0.0).min(1.0);
+
+                self.set_volume(conn, vol).await?;
+
+                Some((self, vol))
+            } else {
+                None
+            }
+        } else {
+            Some((self, vol))
         })
     }
 }

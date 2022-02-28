@@ -67,6 +67,7 @@ fn handle<
     }
 }
 
+#[allow(clippy::too_many_lines)]
 fn register_interface(b: &mut IfaceBuilder<Arc<Server>>) {
     b.method_with_cr_async(
         MethodId::ListPlayers.to_string(),
@@ -151,6 +152,28 @@ fn register_interface(b: &mut IfaceBuilder<Arc<Server>>) {
     );
 
     b.method_with_cr_async(
+        MethodId::VolRelative.to_string(),
+        ("vol",),
+        ("vol",),
+        |ctx, cr, (to,)| {
+            handle(ctx, cr, move |serv| async move {
+                serv.vol_relative(PlayerOpts {}, to).await
+            })
+        },
+    );
+
+    b.method_with_cr_async(
+        MethodId::VolAbsolute.to_string(),
+        ("vol",),
+        ("vol",),
+        |ctx, cr, (to,)| {
+            handle(ctx, cr, move |serv| async move {
+                serv.vol_absolute(PlayerOpts {}, to).await
+            })
+        },
+    );
+
+    b.method_with_cr_async(
         MethodId::SwitchCurrent.to_string(),
         ("to", "switch_playing"),
         (),
@@ -200,6 +223,7 @@ pub async fn run() -> Result {
         Box::new(move |msg, conn| {
             let msg_dbg = format!("{:?}", msg);
 
+            #[allow(clippy::single_match_else)] // Clippy bug
             match cr.handle_message(msg, conn) {
                 Ok(()) => (),
                 Err(()) => warn!("Failed to handle message {}", msg_dbg),
