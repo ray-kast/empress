@@ -256,16 +256,30 @@ impl Server {
                                         .map_or(false, |p| p == *mpris::track_list::NO_TRACK))
                             });
 
-                    Ok(if has_track {
-                        Some((
-                            meta.into_iter()
-                                .map(|(k, Variant(v))| (k, Variant(v.box_clone())))
-                                .collect(),
-                            p.status,
-                        ))
+                    Ok(Some(if has_track {
+                        let mut meta: HashMap<_, _> = meta
+                            .into_iter()
+                            .map(|(k, Variant(v))| (k, Variant(v.box_clone())))
+                            .collect();
+
+                        let bus = p
+                            .bus
+                            .strip_prefix(&**mpris::BUS_NAME)
+                            .and_then(|s| s.strip_prefix('.'))
+                            .map_or_else(String::new, Into::into);
+                        let ident = p.identity(&*self.conn).await?;
+
+                        meta.insert(crate::metadata::PLAYER_BUS.into(), Variant(Box::new(bus)));
+
+                        meta.insert(
+                            crate::metadata::PLAYER_IDENTITY.into(),
+                            Variant(Box::new(ident)),
+                        );
+
+                        (meta, p.status)
                     } else {
-                        None
-                    })
+                        (HashMap::new(), p.status)
+                    }))
                 })
                 .map_ok(|ok| {
                     let (map, status) =

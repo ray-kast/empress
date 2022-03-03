@@ -1,6 +1,6 @@
 use std::{io, sync::Arc, time::Duration};
 
-use anyhow::{Context, Error};
+use anyhow::{anyhow, Context, Error};
 use dbus::{
     arg::{AppendAll, ReadAll, RefArg, Variant},
     nonblock::{Proxy, SyncConnection},
@@ -16,8 +16,11 @@ use crate::{
 };
 
 #[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 struct NowPlayingResult {
     status: String,
+    player_bus: String,
+    player: String,
     title: Option<String>,
     artist: Option<Vec<String>>,
     album: Option<String>,
@@ -27,6 +30,14 @@ impl TryFrom<NowPlayingResponse> for NowPlayingResult {
     type Error = Error;
 
     fn try_from((mut map, status): NowPlayingResponse) -> Result<Self> {
+        let player_bus = map
+            .remove(crate::metadata::PLAYER_BUS)
+            .and_then(|Variant(v)| v.as_str().map(ToOwned::to_owned))
+            .ok_or_else(|| anyhow!("failed to get player bus"))?;
+        let player = map
+            .remove(crate::metadata::PLAYER_IDENTITY)
+            .and_then(|Variant(v)| v.as_str().map(ToOwned::to_owned))
+            .ok_or_else(|| anyhow!("failed to get player identity"))?;
         let title = map
             .remove(mpris::track_list::ATTR_TITLE)
             .and_then(|Variant(v)| v.as_str().map(ToOwned::to_owned));
@@ -46,6 +57,8 @@ impl TryFrom<NowPlayingResponse> for NowPlayingResult {
 
         Ok(Self {
             status,
+            player_bus,
+            player,
             title,
             artist,
             album,

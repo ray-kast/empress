@@ -13,6 +13,15 @@ lazy_static! {
     pub static ref ENTRY_PATH: Path<'static> = (&*PATH_PREFIX).into();
 }
 
+pub mod root {
+    use super::{lazy_static, Interface, Member, NAME_PREFIX};
+
+    lazy_static! {
+        pub static ref INTERFACE: Interface<'static> = NAME_PREFIX.clone().into();
+        pub static ref IDENTITY: Member<'static> = "Identity".into();
+    }
+}
+
 pub mod player {
     use super::{lazy_static, Interface, Member, NAME_PREFIX};
     use crate::Result;

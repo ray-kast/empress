@@ -45,6 +45,11 @@ lazy_static! {
     static ref SERVER_PATH: String = format!("{}/Daemon", *PATH_PREFIX);
 }
 
+pub(crate) mod metadata {
+    pub const PLAYER_BUS: &str = "empress:playerBus";
+    pub const PLAYER_IDENTITY: &str = "empress:playerIdentity";
+}
+
 #[derive(Debug, Clone, Copy, strum::Display)]
 enum MethodId {
     /// List the players currently tracked by the daemon
