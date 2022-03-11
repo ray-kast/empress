@@ -1,6 +1,9 @@
 use std::borrow::Cow::{Borrowed, Owned};
 
-use super::interp::{Context, CowValue, Error, Eval, Result, Stream, Value};
+use super::{
+    ffi,
+    interp::{assert_no_topic, Context, CowValue, Error, Eval, Result, Stream, Value},
+};
 
 #[derive(Debug)]
 pub enum Segment<'a> {
@@ -40,6 +43,11 @@ impl<'a, 's> Eval<'a> for Pipeline<'s> {
 
     fn eval(self, ctx: &'a Context, topic: Option<CowValue<'a>>) -> Result<CowValue<'a>> {
         match self {
+            // Kind of a hack - treat identifiers in a pipeline as calls rather
+            // than values since values can't take a topic
+            Self::Pipe(p, Prim::Path(Path::Ident(i))) => {
+                Prim::Call(i, None).eval(ctx, Some(p.eval(ctx, topic)?))
+            },
             Self::Pipe(p, r) => r.eval(ctx, Some(p.eval(ctx, topic)?)),
             Self::Prim(r) => r.eval(ctx, topic),
         }
@@ -49,7 +57,7 @@ impl<'a, 's> Eval<'a> for Pipeline<'s> {
 #[derive(Debug)]
 pub enum Prim<'a> {
     Path(Path<'a>),
-    Call(&'a str, Args<'a>),
+    Call(&'a str, Option<Args<'a>>),
     Value(Value),
 }
 
@@ -57,14 +65,22 @@ impl<'a, 's> Eval<'a> for Prim<'s> {
     type Output = CowValue<'a>;
 
     fn eval(self, ctx: &'a Context, topic: Option<CowValue<'a>>) -> Result<CowValue<'a>> {
+        if matches!(self, Self::Value(_)) {
+            assert_no_topic(&topic, &self)?;
+        }
+
         match self {
             Self::Path(p) => p.eval(ctx, topic),
-            Self::Call(i, a) => ctx
-                .functions
-                .get(i)
-                .ok_or_else(|| Error::NoFunction(i.into()))?(
-                topic, a.eval(ctx, None)?
-            ),
+            Self::Call(i, a) => {
+                ctx.functions
+                    .get(i)
+                    .ok_or_else(|| Error::NoFunction(i.into()))?(ffi::Input::new(
+                    ctx,
+                    topic,
+                    a.map_or_else(|| Ok(vec![]), |a| a.eval(ctx, None))?,
+                ))
+                .map_err(|e| Error::Ffi(i.into(), e))
+            },
             Self::Value(v) => Ok(Owned(v)),
         }
     }
@@ -80,6 +96,10 @@ impl<'a, 's> Eval<'a> for Path<'s> {
     type Output = CowValue<'a>;
 
     fn eval(self, ctx: &'a Context, topic: Option<CowValue<'a>>) -> Result<CowValue<'a>> {
+        if matches!(self, Self::Ident(_)) {
+            assert_no_topic(&topic, &self)?;
+        }
+
         match self {
             Self::Dot(l, r) => match l.eval(ctx, topic)? {
                 Owned(Value::Object(mut m)) if m.contains_key(r) => {
@@ -107,7 +127,9 @@ pub enum Args<'a> {
 impl<'a, 's> Eval<'a> for Args<'s> {
     type Output = Vec<CowValue<'a>>;
 
-    fn eval(self, ctx: &'a Context, _: Option<CowValue<'a>>) -> Result<Vec<CowValue<'a>>> {
+    fn eval(self, ctx: &'a Context, topic: Option<CowValue<'a>>) -> Result<Vec<CowValue<'a>>> {
+        assert_no_topic(&topic, &self)?;
+
         match self {
             Self::Comma(l, r) => {
                 let mut vec = l.eval(ctx, None)?;

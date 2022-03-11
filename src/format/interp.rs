@@ -1,16 +1,34 @@
-use std::{borrow::Cow, collections::HashMap, fmt::Write};
+use std::{
+    borrow::Cow,
+    fmt::{Debug, Write},
+};
 
 use serde_json::Map;
+
+use super::{ffi, functions::Functions};
+
+pub(super) fn json(value: &Value) -> String {
+    serde_json::to_string(&value).unwrap_or_else(|_| "<error>".into())
+}
+
+pub(super) fn assert_no_topic<D: Debug>(topic: &Option<CowValue>, d: &D) -> Result<()> {
+    match topic {
+        Some(_) => Err(Error::ExtraTopic(format!("{:?}", d))),
+        None => Ok(()),
+    }
+}
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
     #[error("Formatting output failed")]
     Io(#[from] std::fmt::Error),
-    #[error("Cannot format {0:?} as a string")]
+    #[error("Cannot format {} as a string", json(.0))]
     Unprintable(Value),
-    #[error("Type error: expected {1}, got {0:?}")]
-    TypeError(Value, &'static str),
-    #[error("Value {0:?} has no field {1:?}")]
+    #[error("Unexpected pipe input when evaluating {0}")]
+    ExtraTopic(String),
+    #[error("Error executing function {0:?}")]
+    Ffi(String, #[source] ffi::Error),
+    #[error("Value {} has no field {1:?}", json(.0))]
     BadPath(Value, String),
     #[error("No value found named {0:?}")]
     NoValue(String),
@@ -21,11 +39,11 @@ pub enum Error {
 pub type Result<T> = std::result::Result<T, Error>;
 pub use serde_json::Value;
 pub type CowValue<'a> = Cow<'a, Value>;
-pub type Function = for<'a> fn(Option<CowValue<'a>>, Vec<CowValue<'a>>) -> Result<CowValue<'a>>;
 
+#[allow(missing_debug_implementations)]
 pub struct Context {
     pub values: Map<String, Value>,
-    pub functions: HashMap<String, Function>,
+    pub functions: Functions,
 }
 
 pub trait Eval<'a> {

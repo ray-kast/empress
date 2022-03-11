@@ -112,13 +112,13 @@ pub(super) async fn run(cmd: ClientCommand) -> Result {
                 let resp: NowPlayingResult = resp.try_into()?;
 
                 if let Some(format) = format {
-                    println!("{}", format::eval(format, resp)?);
+                    print!("{}", format::eval(format, resp)?);
                 } else {
                     serde_json::to_writer(io::stdout(), &resp)?;
+                }
 
-                    if atty::is(atty::Stream::Stdout) {
-                        println!();
-                    }
+                if atty::is(atty::Stream::Stdout) {
+                    println!();
                 }
             },
             ClientCommand::Seek {

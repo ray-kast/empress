@@ -1,22 +1,30 @@
-use lalrpop_util::lalrpop_mod;
 use nom::error::Error as NomError;
 
 mod ast;
+mod ffi;
+mod functions;
 mod interp;
 mod lexer;
-lalrpop_mod!(parser, "/format/parser.rs");
+
+mod __parser {
+    #![allow(clippy::all, warnings)]
+
+    lalrpop_util::lalrpop_mod!(pub parser, "/format/parser.rs");
+}
+
+pub(self) use __parser::parser;
 
 type ParseError<T> = lalrpop_util::ParseError<lexer::Pos, T, &'static str>;
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
-    #[error("Failed to parse format string: {0}")]
+    #[error("Failed to parse format string")]
     Lex(#[from] NomError<String>),
-    #[error("Failed to parse format string: {0}")]
+    #[error("Failed to parse format string")]
     Parse(#[from] ParseError<String>),
     #[error("Failed to load context into the interpreter")]
     Values(#[from] anyhow::Error),
-    #[error("Failed to evaluate format string: {0}")]
+    #[error("Failed to evaluate format string")]
     Interpret(#[from] interp::Error),
 }
 
@@ -39,11 +47,11 @@ pub fn eval(fmt: impl AsRef<str>, values: impl serde::Serialize) -> Result<Strin
     use interp::StreamAll;
 
     let toks = lexer::scan(fmt.as_ref());
-    log::debug!("{:?}", toks);
+    log::trace!("{:?}", toks);
     let toks = toks?;
 
     let ast = parser::FormatParser::new().parse(toks);
-    log::debug!("{:?}", ast);
+    log::trace!("{:?}", ast);
     let ast = ast?;
 
     let values = match serde_json::to_value(values) {
@@ -59,7 +67,7 @@ pub fn eval(fmt: impl AsRef<str>, values: impl serde::Serialize) -> Result<Strin
     ast.stream_all(
         &interp::Context {
             values,
-            functions: vec![].into_iter().collect(),
+            functions: functions::all(),
         },
         &mut out,
     )?;

@@ -1,4 +1,4 @@
-use super::{ast, lexer};
+use super::super::{ast, lexer};
 
 grammar<'i>;
 
@@ -39,7 +39,7 @@ Pipeline: ast::Pipeline<'i> = {
 
 Prim: ast::Prim<'i> = {
   Path => ast::Prim::Path(<>),
-  <Ident> "(" <Args> ")" => ast::Prim::Call(<>),
+  <Ident> "(" <Args?> ")" => ast::Prim::Call(<>),
   Number => ast::Prim::Value(<>.into()),
 };
 

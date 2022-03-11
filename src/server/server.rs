@@ -138,7 +138,6 @@ impl Server {
         let mut players = self.players.write().await;
         let mut patch = Err(None);
 
-        // TODO: use drain_filter or something less stupid than this
         for player in players.iter() {
             match f(player.clone()).await {
                 Ok(Some(next)) => {
