@@ -34,8 +34,8 @@ impl<'a, 's> Eval<'a> for Expr<'s> {
 
 #[derive(Debug)]
 pub enum Pipeline<'a> {
-    Pipe(Box<Pipeline<'a>>, Prim<'a>),
-    Prim(Prim<'a>),
+    Pipe(Box<Pipeline<'a>>, Lens<'a>),
+    Lens(Lens<'a>),
 }
 
 impl<'a, 's> Eval<'a> for Pipeline<'s> {
@@ -43,61 +43,31 @@ impl<'a, 's> Eval<'a> for Pipeline<'s> {
 
     fn eval(self, ctx: &'a Context, topic: Option<CowValue<'a>>) -> Result<CowValue<'a>> {
         match self {
-            // Kind of a hack - treat identifiers in a pipeline as calls rather
-            // than values since values can't take a topic
-            Self::Pipe(p, Prim::Path(Path::Ident(i))) => {
-                Prim::Call(i, None).eval(ctx, Some(p.eval(ctx, topic)?))
-            },
-            Self::Pipe(p, r) => r.eval(ctx, Some(p.eval(ctx, topic)?)),
-            Self::Prim(r) => r.eval(ctx, topic),
+            Self::Pipe(p, l) => l.eval(ctx, Some(p.eval(ctx, topic)?)),
+            Self::Lens(l) => l.eval(ctx, topic),
         }
     }
 }
 
 #[derive(Debug)]
-pub enum Prim<'a> {
-    Path(Path<'a>),
-    Call(&'a str, Option<Args<'a>>),
-    Value(Value),
+pub enum Lens<'a> {
+    Dot(Box<Lens<'a>>, &'a str),
+    Index(Box<Lens<'a>>, Expr<'a>),
+    Prim(Prim<'a>),
 }
 
-impl<'a, 's> Eval<'a> for Prim<'s> {
+impl<'a, 's> Eval<'a> for Lens<'s> {
     type Output = CowValue<'a>;
 
     fn eval(self, ctx: &'a Context, topic: Option<CowValue<'a>>) -> Result<CowValue<'a>> {
-        if matches!(self, Self::Value(_)) {
-            assert_no_topic(&topic, &self)?;
+        fn as_usize(i: &Value) -> Option<usize> { i.as_u64().and_then(|i| i.try_into().ok()) }
+
+        fn array_has_idx(a: &[Value], i: &Value) -> bool {
+            as_usize(i).map_or(false, |i| a.len() > i)
         }
 
-        match self {
-            Self::Path(p) => p.eval(ctx, topic),
-            Self::Call(i, a) => {
-                ctx.functions
-                    .get(i)
-                    .ok_or_else(|| Error::NoFunction(i.into()))?(ffi::Input::new(
-                    ctx,
-                    topic,
-                    a.map_or_else(|| Ok(vec![]), |a| a.eval(ctx, None))?,
-                ))
-                .map_err(|e| Error::Ffi(i.into(), e))
-            },
-            Self::Value(v) => Ok(Owned(v)),
-        }
-    }
-}
-
-#[derive(Debug)]
-pub enum Path<'a> {
-    Dot(Box<Path<'a>>, &'a str),
-    Ident(&'a str),
-}
-
-impl<'a, 's> Eval<'a> for Path<'s> {
-    type Output = CowValue<'a>;
-
-    fn eval(self, ctx: &'a Context, topic: Option<CowValue<'a>>) -> Result<CowValue<'a>> {
-        if matches!(self, Self::Ident(_)) {
-            assert_no_topic(&topic, &self)?;
+        fn object_has_idx(m: &serde_json::Map<String, Value>, i: &Value) -> bool {
+            i.as_str().map_or(false, |i| m.contains_key(i))
         }
 
         match self {
@@ -110,10 +80,68 @@ impl<'a, 's> Eval<'a> for Path<'s> {
                 },
                 l => Err(Error::BadPath(l.into_owned(), r.into())),
             },
-            Self::Ident(i) => match ctx.values.get(i) {
-                Some(v) => Ok(Borrowed(v)),
-                None => Err(Error::NoValue(i.into())),
+            Self::Index(l, r) => match (l.eval(ctx, topic)?, r.eval(ctx, None)?) {
+                (Owned(Value::Array(mut a)), r) if array_has_idx(&a, &r) => Ok(Owned(
+                    a.remove(as_usize(&r).unwrap_or_else(|| unreachable!())),
+                )),
+                (Borrowed(Value::Array(a)), r) if array_has_idx(a, &r) => {
+                    Ok(Borrowed(&a[as_usize(&r).unwrap_or_else(|| unreachable!())]))
+                },
+                (Owned(Value::Object(mut m)), r) if object_has_idx(&m, &r) => Ok(Owned(
+                    r.as_str()
+                        .and_then(|r| m.remove(r))
+                        .unwrap_or_else(|| unreachable!()),
+                )),
+                (Borrowed(Value::Object(m)), r) if object_has_idx(m, &r) => Ok(Borrowed(
+                    r.as_str()
+                        .and_then(|r| m.get(r))
+                        .unwrap_or_else(|| unreachable!()),
+                )),
+                (l, r) => Err(Error::BadIndex(l.into_owned(), r.into_owned())),
             },
+            Self::Prim(p) => p.eval(ctx, topic),
+        }
+    }
+}
+
+#[derive(Debug)]
+pub enum Prim<'a> {
+    Paren(Expr<'a>),
+    Call(&'a str, Option<Args<'a>>),
+    Ident(&'a str),
+    Value(Value),
+}
+
+impl<'a, 's> Eval<'a> for Prim<'s> {
+    type Output = CowValue<'a>;
+
+    fn eval(self, ctx: &'a Context, topic: Option<CowValue<'a>>) -> Result<CowValue<'a>> {
+        if matches!(self, Self::Value(_)) {
+            assert_no_topic(&topic, &self)?;
+        }
+
+        match self {
+            Self::Paren(e) => e.eval(ctx, topic),
+            Self::Call(i, a) => {
+                ctx.functions
+                    .get(i)
+                    .ok_or_else(|| Error::NoFunction(i.into()))?(ffi::Input::new(
+                    ctx,
+                    topic,
+                    a.map_or_else(|| Ok(vec![]), |a| a.eval(ctx, None))?,
+                ))
+                .map_err(|e| Error::Ffi(i.into(), e))
+            },
+            Self::Ident(i) => match topic {
+                // A little hacky, but if a topic is present treat idents as a
+                // call rather than a value
+                topic @ Some(_) => Prim::Call(i, None).eval(ctx, topic),
+                None => match ctx.values.get(i) {
+                    Some(v) => Ok(Borrowed(v)),
+                    None => Err(Error::NoValue(i.into())),
+                },
+            },
+            Self::Value(v) => Ok(Owned(v)),
         }
     }
 }

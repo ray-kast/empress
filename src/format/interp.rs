@@ -30,6 +30,8 @@ pub enum Error {
     Ffi(String, #[source] ffi::Error),
     #[error("Value {} has no field {1:?}", json(.0))]
     BadPath(Value, String),
+    #[error("Value {} has no index {}", json(.0), json(.1))]
+    BadIndex(Value, Value),
     #[error("No value found named {0:?}")]
     NoValue(String),
     #[error("No function found named {0:?}")]

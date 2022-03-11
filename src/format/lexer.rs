@@ -10,6 +10,7 @@ use nom::{
     sequence::tuple,
     Finish, IResult, InputTakeAtPosition,
 };
+use serde_json::Number;
 
 #[repr(transparent)]
 #[derive(Debug, Clone, Copy, Default)]
@@ -23,7 +24,7 @@ impl std::fmt::Display for Pos {
 
 pub type SpannedTok<'a> = (Pos, Token<'a>, Pos);
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub enum Token<'a> {
     Fragment(&'a str),
     BlockEnd,
@@ -33,8 +34,10 @@ pub enum Token<'a> {
     Pipe,
     LParen,
     RParen,
+    LBrack,
+    RBrack,
     Ident(&'a str),
-    Number(f64),
+    Number(Number),
 }
 
 impl<'a> Token<'a> {
@@ -48,6 +51,8 @@ impl<'a> Token<'a> {
             Bit::Pipe => Token::Pipe,
             Bit::LParen => Token::LParen,
             Bit::RParen => Token::RParen,
+            Bit::LBrack => Token::LBrack,
+            Bit::RBrack => Token::RBrack,
             Bit::Ident(s) => Token::Ident(s),
             Bit::Number(n) => Token::Number(n),
 
@@ -56,7 +61,7 @@ impl<'a> Token<'a> {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 enum Bit<'a> {
     Fragment(&'a str),
     BlockStart,
@@ -68,8 +73,10 @@ enum Bit<'a> {
     Pipe,
     LParen,
     RParen,
+    LBrack,
+    RBrack,
     Ident(&'a str),
-    Number(f64),
+    Number(Number),
 }
 
 type SizedBit<'a> = (usize, Bit<'a>);
@@ -113,7 +120,7 @@ fn btag(val: &'static str, b: Bit<'static>) -> impl for<'a> Fn(&'a str) -> BResu
     move |s| {
         let (s, t) = tag(val)(s)?;
 
-        Ok(bit(s, t, |_| b))
+        Ok(bit(s, t, |_| b.clone()))
     }
 }
 
@@ -156,6 +163,8 @@ fn token() -> impl FnMut(&str) -> BResult {
                 btag("|", Bit::Pipe),
                 btag("(", Bit::LParen),
                 btag(")", Bit::RParen),
+                btag("[", Bit::LBrack),
+                btag("]", Bit::RBrack),
                 ident,
                 float,
                 int,
@@ -276,13 +285,13 @@ fn ident(s: &str) -> BResult {
 fn int(s: &str) -> BResult {
     let (s2, t) = digit1(s)?;
 
-    try_bit(s, s2, t, |t| f64::from_str(t).map(Bit::Number))
+    try_bit(s, s2, t, |t| Number::from_str(t).map(Bit::Number))
 }
 
 fn float(s: &str) -> BResult {
     let (s2, (l, c, r)) = tuple((digit1, char('.'), digit1))(s)?;
 
     try_bit(s, s2, &format!("{}{}{}", l, c, r), |t| {
-        f64::from_str(t).map(Bit::Number)
+        Number::from_str(t).map(Bit::Number)
     })
 }

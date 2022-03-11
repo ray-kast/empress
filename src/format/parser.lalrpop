@@ -1,3 +1,5 @@
+use serde_json::Number;
+
 use super::super::{ast, lexer};
 
 grammar<'i>;
@@ -14,8 +16,10 @@ extern {
     "|" => lexer::Token::Pipe,
     "(" => lexer::Token::LParen,
     ")" => lexer::Token::RParen,
+    "[" => lexer::Token::LBrack,
+    "]" => lexer::Token::RBrack,
     Ident => lexer::Token::Ident(<&'i str>),
-    Number => lexer::Token::Number(<f64>),
+    Number => lexer::Token::Number(<Number>),
   }
 }
 
@@ -33,19 +37,21 @@ Expr: ast::Expr<'i> = {
 };
 
 Pipeline: ast::Pipeline<'i> = {
-  <l:Pipeline> "|" <r:Prim> => ast::Pipeline::Pipe(Box::new(l), r),
-  Prim => ast::Pipeline::Prim(<>),
+  <l:Pipeline> "|" <r:Lens> => ast::Pipeline::Pipe(Box::new(l), r),
+  Lens => ast::Pipeline::Lens(<>),
+};
+
+Lens: ast::Lens<'i> = {
+  <l:Lens> "." <r:Ident> => ast::Lens::Dot(Box::new(l), r),
+  <l:Lens> "[" <r:Expr> "]" => ast::Lens::Index(Box::new(l), r),
+  Prim => ast::Lens::Prim(<>),
 };
 
 Prim: ast::Prim<'i> = {
-  Path => ast::Prim::Path(<>),
+  "(" <Expr> ")" => ast::Prim::Paren(<>),
   <Ident> "(" <Args?> ")" => ast::Prim::Call(<>),
+  Ident => ast::Prim::Ident(<>),
   Number => ast::Prim::Value(<>.into()),
-};
-
-Path: ast::Path<'i> = {
-  <l:Path> "." <r:Ident> => ast::Path::Dot(Box::new(l), r),
-  Ident => ast::Path::Ident(<>),
 };
 
 Args: ast::Args<'i> = {
