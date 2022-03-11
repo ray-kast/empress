@@ -1,6 +1,7 @@
 #![deny(
     clippy::suspicious,
     clippy::style,
+    rustdoc::broken_intra_doc_links,
     missing_debug_implementations,
     missing_copy_implementations
 )]
@@ -22,6 +23,7 @@ use log::{error, LevelFilter};
 use tokio::runtime::Builder as RtBuilder;
 
 mod client;
+mod format;
 mod server;
 
 type Result<T = (), E = Error> = std::result::Result<T, E>;
@@ -114,7 +116,17 @@ enum ClientCommand {
     /// Skip one track forwards
     Next(PlayerOpts),
     /// Print information about the current track
-    NowPlaying(PlayerOpts),
+    NowPlaying {
+        #[clap(flatten)]
+        player: PlayerOpts,
+
+        /// Instead of outputting JSON, output a plaintext string with the given
+        /// format.
+        ///
+        /// TODO: document format
+        #[clap(short, long)]
+        format: Option<String>,
+    },
     /// Skip one track backwards
     Previous(PlayerOpts),
     /// Pause a currently-playing player
@@ -250,7 +262,7 @@ impl ::std::str::FromStr for Offset {
     }
 }
 
-fn log_cfg(v: usize) -> env_logger::Builder {
+fn log_init(v: usize, f: impl FnOnce(&mut env_logger::Builder)) -> Result {
     const VERBOSITY: [LevelFilter; 3] = [LevelFilter::Info, LevelFilter::Debug, LevelFilter::Trace];
     #[cfg(debug_assertions)]
     const DEFAULT_V: usize = 1;
@@ -259,20 +271,23 @@ fn log_cfg(v: usize) -> env_logger::Builder {
 
     let mut b = env_logger::builder();
 
-    b.filter_level(VERBOSITY[(DEFAULT_V + v).min(VERBOSITY.len() - 1)])
-        .parse_default_env();
+    b.filter_level(VERBOSITY[(DEFAULT_V + v).min(VERBOSITY.len() - 1)]);
 
-    b
+    f(&mut b);
+
+    b.parse_default_env().try_init().map_err(Into::into)
 }
 
 fn main() {
     let result = run();
 
-    log_cfg(0).try_init().ok();
-
     match result {
         Ok(()) => (),
-        Err(e) => error!("{:?}", e),
+        Err(e) => {
+            log_init(0, |_| ()).ok();
+
+            error!("{:?}", e);
+        },
     }
 }
 
@@ -290,18 +305,17 @@ fn run() -> Result {
             no_quiet,
             verbose,
         } => {
-            let mut log_cfg = log_cfg(verbose);
-
-            if !(no_quiet || verbose != 0 || atty::is(atty::Stream::Stderr)) || quiet {
-                log_cfg.filter_level(LevelFilter::Warn);
-            }
-
-            log_cfg.init();
+            log_init(verbose, |b| {
+                if !(no_quiet || verbose != 0 || atty::is(atty::Stream::Stderr)) || quiet {
+                    b.filter_level(LevelFilter::Warn);
+                }
+            })
+            .unwrap();
 
             rt.block_on(server::run())
         },
         Opts::Client(id) => {
-            log_cfg(0).init();
+            log_init(0, |_| ()).unwrap();
 
             rt.block_on(client::run(id))
         },

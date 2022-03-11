@@ -1,0 +1,55 @@
+use super::{ast, lexer};
+
+grammar<'i>;
+
+extern {
+  type Location = lexer::Pos;
+
+  enum lexer::Token<'i> {
+    Fragment => lexer::Token::Fragment(<&'i str>),
+    "}}" => lexer::Token::BlockEnd,
+
+    "." => lexer::Token::Dot,
+    "," => lexer::Token::Comma,
+    "|" => lexer::Token::Pipe,
+    "(" => lexer::Token::LParen,
+    ")" => lexer::Token::RParen,
+    Ident => lexer::Token::Ident(<&'i str>),
+    Number => lexer::Token::Number(<f64>),
+  }
+}
+
+pub Format = <Segment*>;
+
+Segment: ast::Segment<'i> = {
+  Fragment => ast::Segment::Fragment(<>),
+  Block => ast::Segment::Block(<>),
+};
+
+Block = <Expr?> "}}";
+
+Expr: ast::Expr<'i> = {
+  Pipeline => ast::Expr(Box::new(<>)),
+};
+
+Pipeline: ast::Pipeline<'i> = {
+  <l:Pipeline> "|" <r:Prim> => ast::Pipeline::Pipe(Box::new(l), r),
+  Prim => ast::Pipeline::Prim(<>),
+};
+
+Prim: ast::Prim<'i> = {
+  Path => ast::Prim::Path(<>),
+  <Ident> "(" <Args> ")" => ast::Prim::Call(<>),
+  Number => ast::Prim::Value(<>.into()),
+};
+
+Path: ast::Path<'i> = {
+  <l:Path> "." <r:Ident> => ast::Path::Dot(Box::new(l), r),
+  Ident => ast::Path::Ident(<>),
+};
+
+Args: ast::Args<'i> = {
+  <l:Args> "," <r:Expr> => ast::Args::Comma(Box::new(l), r),
+  Expr => ast::Args::Expr(<>),
+};
+

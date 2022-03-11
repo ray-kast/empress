@@ -11,6 +11,12 @@ license = "AGPL-3.0-or-later"
 keywords = ["mpris", "music", "play", "pause", "skip"]
 categories = ["command-line-utilities", "multimedia", "os"]
 
+build = "build.rs"
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+
 [dependencies]
 anyhow = "1.0.55"
 atty = "0.2.14"
@@ -20,10 +26,16 @@ dbus-crossroads = "0.5.0"
 dbus-tokio = "0.7.5"
 env_logger = "0.9.0"
 futures = "0.3.21"
+lalrpop-util = { version = "0.19.7", features = ["lexer"] }
 lazy_static = "1.4.0"
 log = "0.4.14"
+nom = "7.1.0"
 regex = "1.5.4"
 serde = { version = "1.0.136", features = ["derive"] }
 serde_json = "1.0.79"
 strum = { version = "0.24.0", features = ["derive"] }
+thiserror = "1.0.30"
 tokio = { version = "1.17.0", features = ["macros", "rt", "signal", "sync"] }
+
+[build-dependencies]
+lalrpop = "0.19.7"

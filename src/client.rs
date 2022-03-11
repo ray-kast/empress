@@ -11,16 +11,23 @@ use serde::Serialize;
 use tokio::{select, sync::oneshot, task};
 
 use crate::{
+    format,
     server::{mpris, mpris::player::PlaybackStatus, NowPlayingResponse},
     ClientCommand, MethodId, PlayerOpts, Result, INTERFACE_NAME, SERVER_NAME, SERVER_PATH,
 };
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
+struct NowPlayingPlayer {
+    bus: String,
+    id: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 struct NowPlayingResult {
     status: String,
-    player_bus: String,
-    player: String,
+    player: NowPlayingPlayer,
     title: Option<String>,
     artist: Option<Vec<String>>,
     album: Option<String>,
@@ -30,11 +37,11 @@ impl TryFrom<NowPlayingResponse> for NowPlayingResult {
     type Error = Error;
 
     fn try_from((mut map, status): NowPlayingResponse) -> Result<Self> {
-        let player_bus = map
+        let bus = map
             .remove(crate::metadata::PLAYER_BUS)
             .and_then(|Variant(v)| v.as_str().map(ToOwned::to_owned))
             .ok_or_else(|| anyhow!("failed to get player bus"))?;
-        let player = map
+        let id = map
             .remove(crate::metadata::PLAYER_IDENTITY)
             .and_then(|Variant(v)| v.as_str().map(ToOwned::to_owned))
             .ok_or_else(|| anyhow!("failed to get player identity"))?;
@@ -57,8 +64,7 @@ impl TryFrom<NowPlayingResponse> for NowPlayingResult {
 
         Ok(Self {
             status,
-            player_bus,
-            player,
+            player: NowPlayingPlayer { bus, id },
             title,
             artist,
             album,
@@ -98,14 +104,21 @@ pub(super) async fn run(cmd: ClientCommand) -> Result {
                     println!("{}\t{}", player, status);
                 }
             },
-            ClientCommand::NowPlaying(opts) => {
-                let PlayerOpts {} = opts;
+            ClientCommand::NowPlaying {
+                player: PlayerOpts {},
+                format,
+            } => {
                 let resp: NowPlayingResponse = try_send(&proxy, id, ()).await?;
+                let resp: NowPlayingResult = resp.try_into()?;
 
-                serde_json::to_writer(io::stdout(), &NowPlayingResult::try_from(resp)?)?;
+                if let Some(format) = format {
+                    println!("{}", format::eval(format, resp)?);
+                } else {
+                    serde_json::to_writer(io::stdout(), &resp)?;
 
-                if atty::is(atty::Stream::Stdout) {
-                    println!();
+                    if atty::is(atty::Stream::Stdout) {
+                        println!();
+                    }
                 }
             },
             ClientCommand::Seek {
