@@ -116,14 +116,13 @@ enum ClientCommand {
     /// Skip one track forwards
     Next(PlayerOpts),
     /// Print information about the current track
+    #[clap(long_about = include_str!("../etc/now_playing_long.txt"))]
     NowPlaying {
         #[clap(flatten)]
         player: PlayerOpts,
 
         /// Instead of outputting JSON, output a plaintext string with the given
-        /// format.
-        ///
-        /// TODO: document format
+        /// format.  See the full help for this command for a syntax reference.
         #[clap(short, long)]
         format: Option<String>,
     },

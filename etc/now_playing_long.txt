@@ -1,0 +1,60 @@
+Print information about the current track.
+
+FORMAT STRING SYNTAX
+
+Format strings take the form of a string of literal text to be printed combined with expressions inside {{...}} blocks.  For example, the format string "The title is {{ title }}" will print "The title is Foo" for a track named Foo.
+
+EXPRESSION REFERENCE
+
+Basic expressions are supported, such as numbers, 'single-quoted strings,' and "double-quoted strings".
+
+Any of the JSON values normally output can be accessed using C-like object access syntax.  For example, {{ title }} gets the track title and {{ player.id }} gets the media player name.  See below for a list of available values.
+
+Arrays of values can be constructed using a comma-separated list in square brackets (e.g. {{ [1, 2, 3] }} creates a three-element array).
+
+Function calls take the form {{ ident(arg1, arg2, ...) }}.  See below for a list of available functions.
+
+Any expression can be wrapped in parentheses for clarity - {{ (12) }} is equivalent to {{ 12 }}, etc.
+
+Values in an array or an object can be accessed using the index operator.  For example {{ artist[0] }} retrieves the first artist and {{ player["id"] }} retrieves the player name.  Indexing into a value with an invalid index will throw an error.
+
+Expressions can be piped through functions using the | (pipe) operator.  When calling a pipe function with no arguments, parentheses are optional, so {{ "hi" | lower() }} is equivalent to {{ "hi" | lower }}.  You can chain as many functions together using pipes as you like.
+
+To provide a fallback value in case an expression is blank the ?? (null-coalescing) operator can be used.  For instance, to handle players that can return null for the album field, one might use {{ album ?? "Unknown album" }}.
+
+VALUE REFERENCE
+
+To see the values available to format strings, simply run the now-playing command without any format string and the raw JSON will be printed.  Currently, the values provided are:
+
+{
+  "status": string, // one of 'Playing', 'Paused', or 'Stopped'
+  "player": {
+    "bus": string,
+    "id": string,
+  },
+  "title": string?,
+  "artist": string[]?,
+  "album": string?,
+}
+
+FUNCTION REFERENCE
+
+compact(): When an array is piped in, returns a new array with all the blank elements removed
+
+join(sep): When an array is piped in, returns a string containing each element separated by `sep`
+
+json(): When any value is piped in, returns a JSON string representing that value
+
+lower(): When any printable value is piped in, returns its printed form converted to lowercase
+
+shorten(len, val): When any printable value is piped in, returns a string no more than `len` characters long.  If the string has been shortened it will end with `val`.
+
+shortenMid(len, val): When any printable value is piped in, returns a string no more than `len` characters long.  If the string has been shortened its middle will be replaced with `val`.
+
+sym(): Converts several special strings to Unicode symbols.  Currently if the {{ status }} field is piped into this function it will be converted to the appropriate play/pause/stop symbol.
+
+trim(): When any printable value is piped in, returns its printed form with all whitespace trimmed off both ends of the resulting string.
+
+upper(): When any printable value is piped in, returns its printed form converted to uppercase
+
+xml(): When any printable value is piped in, returns its printed form with all illegal XML characters replaced with their appropriate XML entity forms.  This is useful for applications where the output string must be valid Pango markup.
