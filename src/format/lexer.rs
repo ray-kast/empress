@@ -4,7 +4,7 @@ use nom::{
     branch::alt,
     bytes::complete::tag,
     character::complete::{char, digit1},
-    combinator::eof,
+    combinator::{eof, map},
     error::ErrorKind,
     multi::many0,
     sequence::tuple,
@@ -38,6 +38,7 @@ pub enum Token<'a> {
     RBrack,
     Ident(&'a str),
     Number(Number),
+    String(String),
 }
 
 impl<'a> Token<'a> {
@@ -55,6 +56,7 @@ impl<'a> Token<'a> {
             Bit::RBrack => Token::RBrack,
             Bit::Ident(s) => Token::Ident(s),
             Bit::Number(n) => Token::Number(n),
+            Bit::String(s) => Token::String(s),
 
             Bit::Whitespace | Bit::BlockStart => None?,
         })
@@ -77,6 +79,7 @@ enum Bit<'a> {
     RBrack,
     Ident(&'a str),
     Number(Number),
+    String(String),
 }
 
 type SizedBit<'a> = (usize, Bit<'a>);
@@ -124,6 +127,51 @@ fn btag(val: &'static str, b: Bit<'static>) -> impl for<'a> Fn(&'a str) -> BResu
     }
 }
 
+fn any1(s: &str) -> IResult<&str, &str> { s.split_at_position1_complete(|_| true, ErrorKind::Char) }
+
+// Adapted from split_at_position1_complete
+fn split_before<'a, O, E>(
+    allow_empty: bool,
+    mut parser: impl nom::Parser<&'a str, O, E>,
+) -> impl FnMut(&'a str) -> IResult<&'a str, &'a str> {
+    #[allow(clippy::unnecessary_wraps)]
+    unsafe fn ok(s: &str, i: usize) -> IResult<&str, &str> {
+        Ok((s.get_unchecked(i..), s.get_unchecked(..i)))
+    }
+
+    fn err(input: &str) -> IResult<&str, &str> {
+        Err(nom::Err::Error(nom::error::Error {
+            input,
+            code: ErrorKind::Eof,
+        }))
+    }
+
+    move |s| match s.char_indices().find_map(|(i, _)| {
+        // char_indices() returns an index that is already
+        // a char boundary
+        let s = unsafe { s.get_unchecked(i..) };
+
+        if parser.parse(s).is_ok() && (allow_empty || i != 0) {
+            Some(i)
+        } else {
+            None
+        }
+    }) {
+        Some(0) => err(s),
+        // char_indices() returns a byte index that is already
+        // in the slice at a char boundary
+        Some(i) => unsafe { ok(s, i) },
+        None => {
+            if s.is_empty() {
+                err(s)
+            } else {
+                // The end of slice is a char boundary
+                unsafe { ok(s, s.len()) }
+            }
+        },
+    }
+}
+
 //// Lexer internals
 
 fn tokens(s: &str) -> IResult<&str, Vec<SpannedTok>> {
@@ -168,6 +216,8 @@ fn token() -> impl FnMut(&str) -> BResult {
                 ident,
                 float,
                 int,
+                string("'"),
+                string("\""),
             ))(s)?;
 
             in_block = !matches!(t.1, Bit::BlockEnd);
@@ -178,48 +228,13 @@ fn token() -> impl FnMut(&str) -> BResult {
 
             match terminator(s) {
                 Err(_) => {
-                    #[allow(clippy::unnecessary_wraps)]
-                    unsafe fn ok(s: &str, i: usize) -> BResult {
-                        Ok(bit(
-                            s.get_unchecked(i..),
-                            s.get_unchecked(..i),
-                            Bit::Fragment,
-                        ))
-                    }
-
-                    fn err(input: &str) -> BResult {
-                        Err(nom::Err::Error(nom::error::Error {
-                            input,
-                            code: ErrorKind::Eof,
-                        }))
-                    }
-
-                    // Adapted from split_at_position1_complete
-
                     // Performance note: this is possibly prone to quadratic
                     //                   backtracking, but the terminator isn't
                     //                   very long so hopefully it's not a huge
                     //                   deal.
-                    match s.char_indices().find_map(|(i, _)| {
-                        // char_indices() returns an index that is already
-                        // a char boundary
-                        let s = unsafe { s.get_unchecked(i..) };
+                    let (s, t) = split_before(false, terminator)(s)?;
 
-                        if terminator(s).is_ok() { Some(i) } else { None }
-                    }) {
-                        Some(0) => err(s),
-                        // char_indices() returns a byte index that is already
-                        // in the slice at a char boundary
-                        Some(i) => unsafe { ok(s, i) },
-                        None => {
-                            if s.is_empty() {
-                                err(s)
-                            } else {
-                                // The end of slice is a char boundary
-                                unsafe { ok(s, s.len()) }
-                            }
-                        },
-                    }
+                    Ok(bit(s, t, Bit::Fragment))
                 },
                 Ok((s, t)) => {
                     in_block = matches!(t.1, Bit::BlockStart);
@@ -232,7 +247,7 @@ fn token() -> impl FnMut(&str) -> BResult {
 
 fn escape(s: &str) -> BResult {
     let (s, _) = tag("\\")(s)?;
-    let (s, c) = s.split_at_position1_complete(|_| true, ErrorKind::Eof)?;
+    let (s, c) = any1(s)?;
 
     Ok(bit(s, c, Bit::Fragment))
 }
@@ -294,4 +309,45 @@ fn float(s: &str) -> BResult {
     try_bit(s, s2, &format!("{}{}{}", l, c, r), |t| {
         Number::from_str(t).map(Bit::Number)
     })
+}
+
+fn string(delim: &'static str) -> impl for<'a> FnMut(&'a str) -> BResult<'a> {
+    move |s| {
+        let delim = tag(delim);
+        let (mut s, t) = delim(s)?;
+
+        // NOTE: this is the length of the input token, not out.len()!
+        let mut len = t.len();
+        let mut out = String::new();
+
+        let mut terminator = alt((
+            map(tuple((tag("\\"), any1)), |(t, c)| {
+                (Some(c), t.len() + c.len())
+            }),
+            map(delim, |s| (None, s.len())),
+        ));
+
+        loop {
+            match terminator(s) {
+                Err(_) => {
+                    let (s2, t) = split_before(false, &mut terminator)(s)?;
+                    s = s2;
+                    len += t.len();
+                    out.push_str(t);
+                },
+                Ok((s2, (Some(c), l))) => {
+                    s = s2;
+                    len += l;
+                    out.push_str(c);
+                },
+                Ok((s2, (None, l))) => {
+                    s = s2;
+                    len += l;
+                    break;
+                },
+            }
+        }
+
+        Ok((s, (len, Bit::String(out))))
+    }
 }

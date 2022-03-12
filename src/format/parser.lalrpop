@@ -20,6 +20,7 @@ extern {
     "]" => lexer::Token::RBrack,
     Ident => lexer::Token::Ident(<&'i str>),
     Number => lexer::Token::Number(<Number>),
+    String => lexer::Token::String(<String>),
   }
 }
 
@@ -50,8 +51,10 @@ Lens: ast::Lens<'i> = {
 Prim: ast::Prim<'i> = {
   "(" <Expr> ")" => ast::Prim::Paren(<>),
   <Ident> "(" <Args?> ")" => ast::Prim::Call(<>),
+  "[" <Args?> "]" => ast::Prim::Array(<>),
   Ident => ast::Prim::Ident(<>),
   Number => ast::Prim::Value(<>.into()),
+  String => ast::Prim::Value(<>.into()),
 };
 
 Args: ast::Args<'i> = {

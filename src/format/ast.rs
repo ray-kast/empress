@@ -11,11 +11,19 @@ pub enum Segment<'a> {
     Block(Option<Expr<'a>>),
 }
 
-impl<'s> Stream for Segment<'s> {
+impl<'a, 's> Stream<'a> for Segment<'s> {
+    type Context = &'a Context;
+    type Error = Error;
+
     fn stream(self, ctx: &Context, mut out: impl std::fmt::Write) -> Result<()> {
         match self {
             Self::Fragment(s) => out.write_str(s).map_err(Into::into),
-            Self::Block(e) => e.map_or(Ok(()), |e| e.eval(ctx, None)?.as_ref().stream(ctx, out)),
+            Self::Block(e) => e.map_or(Ok(()), |e| {
+                e.eval(ctx, None)?
+                    .as_ref()
+                    .stream((), out)
+                    .map_err(Into::into)
+            }),
         }
     }
 }
@@ -108,6 +116,7 @@ impl<'a, 's> Eval<'a> for Lens<'s> {
 pub enum Prim<'a> {
     Paren(Expr<'a>),
     Call(&'a str, Option<Args<'a>>),
+    Array(Option<Args<'a>>),
     Ident(&'a str),
     Value(Value),
 }
@@ -132,6 +141,13 @@ impl<'a, 's> Eval<'a> for Prim<'s> {
                 ))
                 .map_err(|e| Error::Ffi(i.into(), e))
             },
+            Self::Array(a) => a
+                .map_or_else(|| Ok(vec![]), |a| a.eval(ctx, None))
+                .map(|v| {
+                    Owned(Value::Array(
+                        v.into_iter().map(CowValue::into_owned).collect(),
+                    ))
+                }),
             Self::Ident(i) => match topic {
                 // A little hacky, but if a topic is present treat idents as a
                 // call rather than a value

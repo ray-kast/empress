@@ -1,4 +1,9 @@
-use super::interp::{json, Context, CowValue, Value};
+use std::borrow::{
+    Cow,
+    Cow::{Borrowed, Owned},
+};
+
+use super::interp::{json, Context, CowValue, StreamError, Value};
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
@@ -12,6 +17,17 @@ pub enum Error {
     ExtraTopic,
     #[error("An internal error occurred")]
     Internal(#[from] anyhow::Error),
+}
+
+impl From<StreamError> for Error {
+    fn from(err: StreamError) -> Self {
+        match err {
+            StreamError::Io(e) => {
+                Self::Internal(anyhow::Error::new(e).context("I/O error while printing a value"))
+            },
+            StreamError::Unprintable(v) => Self::TypeError("a printable value", v),
+        }
+    }
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
@@ -122,4 +138,18 @@ impl<'a> TryFrom<CowValue<'a>> for Any<'a> {
     type Error = Error;
 
     fn try_from(val: CowValue<'a>) -> Result<Self> { Ok(Self(val)) }
+}
+
+pub struct Array<'a>(pub Cow<'a, Vec<Value>>);
+
+impl<'a> TryFrom<CowValue<'a>> for Array<'a> {
+    type Error = Error;
+
+    fn try_from(val: CowValue<'a>) -> Result<Self> {
+        match val {
+            Borrowed(Value::Array(v)) => Ok(Self(Borrowed(v))),
+            Owned(Value::Array(v)) => Ok(Self(Owned(v))),
+            v => Err(Error::TypeError("an array", v.into_owned())),
+        }
+    }
 }

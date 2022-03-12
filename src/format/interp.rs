@@ -20,10 +20,8 @@ pub(super) fn assert_no_topic<D: Debug>(topic: &Option<CowValue>, d: &D) -> Resu
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
-    #[error("Formatting output failed")]
-    Io(#[from] std::fmt::Error),
-    #[error("Cannot format {} as a string", json(.0))]
-    Unprintable(Value),
+    #[error("Failed to write format output")]
+    Stream(#[source] StreamError),
     #[error("Unexpected pipe input when evaluating {0}")]
     ExtraTopic(String),
     #[error("Error executing function {0:?}")]
@@ -38,7 +36,19 @@ pub enum Error {
     NoFunction(String),
 }
 
-pub type Result<T> = std::result::Result<T, Error>;
+#[derive(Debug, thiserror::Error)]
+pub enum StreamError {
+    #[error("An I/O error occurred")]
+    Io(#[from] std::fmt::Error),
+    #[error("Cannot format {} as a string", json(.0))]
+    Unprintable(Value),
+}
+
+impl<T: Into<StreamError>> From<T> for Error {
+    fn from(err: T) -> Self { Self::Stream(err.into()) }
+}
+
+pub type Result<T, E = Error> = std::result::Result<T, E>;
 pub use serde_json::Value;
 pub type CowValue<'a> = Cow<'a, Value>;
 
@@ -54,29 +64,44 @@ pub trait Eval<'a> {
     fn eval(self, ctx: &'a Context, topic: Option<CowValue<'a>>) -> Result<Self::Output>;
 }
 
-pub trait Stream {
-    fn stream(self, ctx: &Context, out: impl Write) -> Result<()>;
+pub trait Stream<'a> {
+    type Context: 'a;
+    type Error: From<StreamError>;
+
+    fn stream(self, ctx: Self::Context, out: impl Write) -> Result<(), Self::Error>;
 }
 
-impl Stream for &Value {
-    fn stream(self, _: &Context, mut out: impl Write) -> Result<()> {
+impl Stream<'static> for &Value {
+    type Context = ();
+    type Error = StreamError;
+
+    fn stream(self, (): (), mut out: impl Write) -> Result<(), StreamError> {
         match self {
             Value::Null => Ok(()),
             Value::Number(n) => out.write_fmt(format_args!("{}", n)).map_err(Into::into),
             Value::String(s) => out.write_str(s).map_err(Into::into),
             Value::Bool(_) | Value::Array(_) | Value::Object(_) => {
-                Err(Error::Unprintable(self.clone()))
+                Err(StreamError::Unprintable(self.clone()))
             },
         }
     }
 }
 
-pub trait StreamAll: IntoIterator {
-    fn stream_all(self, ctx: &Context, out: impl Write) -> Result<()>;
+pub trait StreamAll<'a>: IntoIterator {
+    type Context: 'a;
+    type Error: From<StreamError>;
+
+    fn stream_all(self, ctx: Self::Context, out: impl Write) -> Result<(), Self::Error>;
 }
 
-impl<T: Stream, I: IntoIterator<Item = T>> StreamAll for I {
-    fn stream_all(self, ctx: &Context, mut out: impl Write) -> Result<()> {
-        self.into_iter().try_for_each(|s| s.stream(ctx, &mut out))
+impl<'a, T: Stream<'a>, I: IntoIterator<Item = T>> StreamAll<'a> for I
+where T::Context: Clone
+{
+    type Context = T::Context;
+    type Error = T::Error;
+
+    fn stream_all(self, ctx: T::Context, mut out: impl Write) -> Result<(), T::Error> {
+        self.into_iter()
+            .try_for_each(|s| s.stream(ctx.clone(), &mut out))
     }
 }
