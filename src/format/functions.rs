@@ -8,7 +8,7 @@ use regex::Regex;
 
 use super::{
     ffi::{Any, Array, Error, Function, Input, Number, Output, Result, Topic},
-    interp::{Stream, StreamString, Value},
+    interp::{is_null_like, Stream, StreamString, Value},
 };
 use crate::server::mpris::player::PlaybackStatus;
 
@@ -32,15 +32,6 @@ pub fn all() -> Functions {
 }
 
 //// Helper functions
-
-#[inline]
-fn null_like(val: &Value) -> bool {
-    match val {
-        Value::Null => true,
-        Value::String(s) if s.is_empty() => true,
-        _ => false,
-    }
-}
 
 #[inline]
 fn stream_str(inp: Input, f: impl FnOnce(String) -> String) -> Output {
@@ -86,8 +77,8 @@ fn compact(inp: Input) -> Output {
     let (_ctx, Topic(Array(arr)), ()) = inp.try_into()?;
 
     Ok(Owned(match arr {
-        Owned(a) => a.into_iter().filter(|e| !null_like(e)).collect(),
-        Borrowed(a) => a.iter().cloned().filter(|e| !null_like(e)).collect(),
+        Owned(a) => a.into_iter().filter(|e| !is_null_like(e)).collect(),
+        Borrowed(a) => a.iter().cloned().filter(|e| !is_null_like(e)).collect(),
     }))
 }
 

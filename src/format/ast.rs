@@ -2,7 +2,9 @@ use std::borrow::Cow::{Borrowed, Owned};
 
 use super::{
     ffi,
-    interp::{assert_no_topic, Context, CowValue, Error, Eval, Result, Stream, Value},
+    interp::{
+        assert_no_topic, is_null_like, Context, CowValue, Error, Eval, Result, Stream, Value,
+    },
 };
 
 #[derive(Debug)]
@@ -30,13 +32,34 @@ impl<'a, 's> Stream<'a> for Segment<'s> {
 
 #[repr(transparent)]
 #[derive(Debug)]
-pub struct Expr<'a>(pub Box<Pipeline<'a>>);
+pub struct Expr<'a>(pub Box<NullChain<'a>>);
 
 impl<'a, 's> Eval<'a> for Expr<'s> {
-    type Output = <Pipeline<'s> as Eval<'a>>::Output;
+    type Output = <NullChain<'s> as Eval<'a>>::Output;
 
     fn eval(self, ctx: &'a Context, topic: Option<CowValue<'a>>) -> Result<Self::Output> {
         self.0.eval(ctx, topic)
+    }
+}
+
+#[derive(Debug)]
+pub enum NullChain<'a> {
+    Chain(Box<NullChain<'a>>, Pipeline<'a>),
+    Pipe(Pipeline<'a>),
+}
+
+impl<'a, 's> Eval<'a> for NullChain<'s> {
+    type Output = CowValue<'a>;
+
+    fn eval(self, ctx: &'a Context, topic: Option<CowValue<'a>>) -> Result<CowValue<'a>> {
+        match self {
+            Self::Chain(c, p) => match c.eval(ctx, topic.clone())? {
+                Borrowed(v) if is_null_like(v) => p.eval(ctx, topic),
+                Owned(v) if is_null_like(&v) => p.eval(ctx, topic),
+                v => Ok(v),
+            },
+            Self::Pipe(p) => p.eval(ctx, topic),
+        }
     }
 }
 

@@ -18,6 +18,15 @@ pub(super) fn assert_no_topic<D: Debug>(topic: &Option<CowValue>, d: &D) -> Resu
     }
 }
 
+#[inline]
+pub(super) fn is_null_like(val: &Value) -> bool {
+    match val {
+        Value::Null => true,
+        Value::String(s) if s.is_empty() => true,
+        _ => false,
+    }
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
     #[error("Failed to write format output")]

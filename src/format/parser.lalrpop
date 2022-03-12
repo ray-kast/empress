@@ -14,6 +14,7 @@ extern {
     "." => lexer::Token::Dot,
     "," => lexer::Token::Comma,
     "|" => lexer::Token::Pipe,
+    "??" => lexer::Token::Coalesce,
     "(" => lexer::Token::LParen,
     ")" => lexer::Token::RParen,
     "[" => lexer::Token::LBrack,
@@ -34,7 +35,12 @@ Segment: ast::Segment<'i> = {
 Block = <Expr?> "}}";
 
 Expr: ast::Expr<'i> = {
-  Pipeline => ast::Expr(Box::new(<>)),
+  NullChain => ast::Expr(Box::new(<>)),
+};
+
+NullChain: ast::NullChain<'i> = {
+  <l:NullChain> "??" <r:Pipeline> => ast::NullChain::Chain(Box::new(l), r),
+  Pipeline => ast::NullChain::Pipe(<>),
 };
 
 Pipeline: ast::Pipeline<'i> = {
