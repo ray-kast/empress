@@ -240,7 +240,7 @@ impl Player {
             conn,
         )
         .await
-        .and_then(|s: String| s.parse())
+        .and_then(|s: String| s.parse().context("Invalid playback status"))
     }
 
     pub async fn metadata(

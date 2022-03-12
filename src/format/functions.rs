@@ -10,16 +10,19 @@ use super::{
     ffi::{Any, Array, Error, Function, Input, Number, Output, Result, Topic},
     interp::{Stream, StreamString, Value},
 };
+use crate::server::mpris::player::PlaybackStatus;
 
 pub type Functions = HashMap<&'static str, Function>;
 
 pub fn all() -> Functions {
     vec![
-        ("join", join as Function),
+        ("compact", compact as Function),
+        ("join", join),
         ("json", json),
         ("lower", lower),
         ("shorten", shorten),
         ("shortenMid", shorten_mid),
+        ("sym", sym),
         ("trim", trim),
         ("upper", upper),
         ("xml", xml),
@@ -29,6 +32,15 @@ pub fn all() -> Functions {
 }
 
 //// Helper functions
+
+#[inline]
+fn null_like(val: &Value) -> bool {
+    match val {
+        Value::Null => true,
+        Value::String(s) if s.is_empty() => true,
+        _ => false,
+    }
+}
 
 #[inline]
 fn stream_str(inp: Input, f: impl FnOnce(String) -> String) -> Output {
@@ -69,6 +81,15 @@ fn shorten_len(s: &str, ellipsis: &str, max_len: usize) -> Result<Option<Shorten
 }
 
 //// Format function definitions
+
+fn compact(inp: Input) -> Output {
+    let (_ctx, Topic(Array(arr)), ()) = inp.try_into()?;
+
+    Ok(Owned(match arr {
+        Owned(a) => a.into_iter().filter(|e| !null_like(e)).collect(),
+        Borrowed(a) => a.iter().cloned().filter(|e| !null_like(e)).collect(),
+    }))
+}
 
 fn join(inp: Input) -> Output {
     let (_ctx, Topic(Array(arr)), (Any(sep), ())) = inp.try_into()?;
@@ -161,6 +182,15 @@ fn shorten_mid(inp: Input) -> Output {
         },
         None => val,
     })))
+}
+
+fn sym(inp: Input) -> Output {
+    stream_str(inp, |s| match s.parse() {
+        Ok(PlaybackStatus::Playing) => "▶".into(),
+        Ok(PlaybackStatus::Paused) => "⏸".into(),
+        Ok(PlaybackStatus::Stopped) => "⏹".into(),
+        Err(_) => s,
+    })
 }
 
 fn trim(inp: Input) -> Output { stream_str(inp, |s| s.trim().to_owned()) }

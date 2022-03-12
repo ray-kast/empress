@@ -24,7 +24,6 @@ pub mod root {
 
 pub mod player {
     use super::{lazy_static, Interface, Member, NAME_PREFIX};
-    use crate::Result;
 
     lazy_static! {
         pub static ref INTERFACE: Interface<'static> = format!("{}.Player", *NAME_PREFIX).into();
@@ -46,34 +45,13 @@ pub mod player {
         pub static ref CAN_CONTROL: Member<'static> = "CanControl".into();
     }
 
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+    #[derive(
+        Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, strum::EnumString, strum::Display,
+    )]
     pub enum PlaybackStatus {
         Playing,
         Paused,
         Stopped,
-    }
-
-    impl std::fmt::Display for PlaybackStatus {
-        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-            f.write_str(match self {
-                Self::Playing => "Playing",
-                Self::Paused => "Paused",
-                Self::Stopped => "Stopped",
-            })
-        }
-    }
-
-    impl std::str::FromStr for PlaybackStatus {
-        type Err = anyhow::Error;
-
-        fn from_str(s: &str) -> Result<Self> {
-            Ok(match s {
-                "Playing" => Self::Playing,
-                "Paused" => Self::Paused,
-                "Stopped" => Self::Stopped,
-                s => return Err(anyhow::anyhow!("unexpected playback status {:?}", s)),
-            })
-        }
     }
 }
 
