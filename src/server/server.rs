@@ -15,7 +15,7 @@ use dbus::{
     strings::{BusName, Path},
 };
 use futures::prelude::*;
-use log::{debug, warn};
+use log::{debug, trace, warn};
 use tokio::{
     select,
     sync::{mpsc, RwLock},
@@ -95,7 +95,11 @@ impl Server {
     }
 
     async fn scan(&self, force: bool) -> Result {
-        debug!("Running {} scan...", if force { "full" } else { "quick" });
+        if force {
+            debug!("Running full scan...");
+        } else {
+            trace!("Running quick scan...");
+        }
 
         let proxy = Proxy::new(
             "org.freedesktop.DBus",
@@ -122,7 +126,7 @@ impl Server {
         )
         .await;
 
-        debug!("{} scan completed", if force { "Full" } else { "Quick" });
+        trace!("Scan completed.");
 
         Ok(())
     }
