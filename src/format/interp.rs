@@ -64,6 +64,18 @@ pub trait Eval<'a> {
     fn eval(self, ctx: &'a Context, topic: Option<CowValue<'a>>) -> Result<Self::Output>;
 }
 
+pub trait StreamString<'a>: Stream<'a> {
+    fn stream_string(self, ctx: Self::Context) -> Result<String, Self::Error>;
+}
+
+impl<'a, T: Stream<'a>> StreamString<'a> for T {
+    fn stream_string(self, ctx: Self::Context) -> Result<String, Self::Error> {
+        let mut s = String::new();
+        self.stream(ctx, &mut s)?;
+        Ok(s)
+    }
+}
+
 pub trait Stream<'a> {
     type Context: 'a;
     type Error: From<StreamError>;

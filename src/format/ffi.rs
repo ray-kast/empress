@@ -15,15 +15,15 @@ pub enum Error {
     NoTopic,
     #[error("Unexpected pipe input")]
     ExtraTopic,
-    #[error("An internal error occurred")]
-    Internal(#[from] anyhow::Error),
+    #[error("An error occurred while executing the function")]
+    Other(#[from] anyhow::Error),
 }
 
 impl From<StreamError> for Error {
     fn from(err: StreamError) -> Self {
         match err {
             StreamError::Io(e) => {
-                Self::Internal(anyhow::Error::new(e).context("I/O error while printing a value"))
+                Self::Other(anyhow::Error::new(e).context("I/O error while printing a value"))
             },
             StreamError::Unprintable(v) => Self::TypeError("a printable value", v),
         }
@@ -90,6 +90,18 @@ impl<'a> Input<'a> {
     }
 }
 
+trait MarshalNumber: Sized {
+    fn marshal_num(num: &serde_json::Number) -> Result<Self>;
+}
+
+impl MarshalNumber for usize {
+    fn marshal_num(num: &serde_json::Number) -> Result<Self> {
+        num.as_u64()
+            .and_then(|n| usize::try_from(n).ok())
+            .ok_or_else(|| Error::TypeError("a usize", Value::Number(num.clone())))
+    }
+}
+
 impl<'a, T, A> TryFrom<Input<'a>> for (&'a Context, T, A)
 where
     T: MarshalTopic<'a>,
@@ -150,6 +162,19 @@ impl<'a> TryFrom<CowValue<'a>> for Array<'a> {
             Borrowed(Value::Array(v)) => Ok(Self(Borrowed(v))),
             Owned(Value::Array(v)) => Ok(Self(Owned(v))),
             v => Err(Error::TypeError("an array", v.into_owned())),
+        }
+    }
+}
+
+pub struct Number<T>(pub T);
+
+impl<'a, T: MarshalNumber> TryFrom<CowValue<'a>> for Number<T> {
+    type Error = Error;
+
+    fn try_from(val: CowValue<'a>) -> Result<Self> {
+        match val.as_ref() {
+            Value::Number(n) => T::marshal_num(n).map(Self),
+            _ => Err(Error::TypeError("a number", val.into_owned())),
         }
     }
 }
