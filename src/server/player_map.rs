@@ -6,7 +6,7 @@ use std::{
 
 use dbus::strings::BusName;
 use futures::{stream::FuturesUnordered, StreamExt};
-use log::{trace, warn};
+use log::{debug, trace, warn};
 use tokio::sync::RwLock;
 
 use super::{mpris::player::PlaybackStatus, Player};
@@ -99,7 +99,25 @@ impl PlayerMap {
 
     pub fn new() -> Self { Self(HashMap::new(), BTreeSet::new()) }
 
-    pub fn iter(&self) -> impl Iterator<Item = &Player> { self.1.iter() }
+    pub fn iter_all(&self) -> impl Iterator<Item = &Player> { self.1.iter() }
+
+    /// Returns all players whose status matches that of the first (i.e.
+    /// highest-priority) player in the list.  This should be used when
+    /// selecting a player to run an action on, to avoid unexpected behavior.
+    pub fn iter_active(&self) -> impl Iterator<Item = &Player> {
+        let mut prev = None;
+
+        self.1.iter().take_while(move |p| {
+            let ret = prev.map_or(true, |s| s == p.status);
+            prev = Some(p.status);
+
+            if !ret {
+                debug!("Stopping active-player search before {:?}", p);
+            }
+
+            ret
+        })
+    }
 
     /// Always updates the map, but only returns true if a new key was inserted
     pub fn put(&mut self, player: Player) -> bool {

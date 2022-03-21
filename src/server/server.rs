@@ -142,7 +142,7 @@ impl Server {
         let mut players = self.players.write().await;
         let mut patch = Err(None);
 
-        for player in players.iter() {
+        for player in players.iter_active() {
             match f(player.clone()).await {
                 Ok(Some(next)) => {
                     patch = Ok(Some(next));
@@ -174,7 +174,7 @@ impl Server {
         let players = self.players.read().await;
         let mut default = Err(None);
 
-        for player in players.iter() {
+        for player in players.iter_active() {
             match f(player.clone()).await {
                 ok @ Ok(Some(_)) => return ok,
                 Ok(None) => default = Ok(None),
@@ -223,7 +223,7 @@ impl Server {
                     .players
                     .read()
                     .await
-                    .iter()
+                    .iter_all()
                     .filter_map(|p| {
                         p.bus
                             .strip_prefix(&**mpris::BUS_NAME)
@@ -448,7 +448,7 @@ impl Server {
                     let mut put = vec![];
                     let conn = &*self.conn;
 
-                    for player in self.players.read().await.iter() {
+                    for player in self.players.read().await.iter_all() {
                         if player.playback_status(conn).await? == PlaybackStatus::Playing
                             && player.can_pause(conn).await?
                         {
