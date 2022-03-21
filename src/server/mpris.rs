@@ -59,6 +59,7 @@ pub mod track_list {
     use super::{lazy_static, Path};
 
     pub const ATTR_TRACKID: &str = "mpris:trackid";
+    pub const ATTR_LENGTH: &str = "mpris:length";
     pub const ATTR_TITLE: &str = "xesam:title";
     pub const ATTR_ARTIST: &str = "xesam:artist";
     pub const ATTR_ALBUM: &str = "xesam:album";

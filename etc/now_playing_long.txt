@@ -35,11 +35,15 @@ To see the values available to format strings, simply run the now-playing comman
   "title": string?,
   "artist": string[]?,
   "album": string?,
+  "length": int64?,
+  "position": int64?,
 }
 
 FUNCTION REFERENCE
 
 compact(): When an array is piped in, returns a new array with all the blank elements removed
+
+eta(len): When a number of microseconds is piped in and a duration in microseconds is passed, formats the time remaining in -h:mm:ss format
 
 join(sep): When an array is piped in, returns a string containing each element separated by `sep`
 
@@ -52,6 +56,8 @@ shorten(len, val): When any printable value is piped in, returns a string no mor
 shortenMid(len, val): When any printable value is piped in, returns a string no more than `len` characters long.  If the string has been shortened its middle will be replaced with `val`.
 
 sym(): Converts several special strings to Unicode symbols.  Currently if the {{ status }} field is piped into this function it will be converted to the appropriate play/pause/stop symbol.
+
+time(): When a number of microseconds is passed in, converts it to human-readable time in h:mm:ss format.
 
 trim(): When any printable value is piped in, returns its printed form with all whitespace trimmed off both ends of the resulting string.
 

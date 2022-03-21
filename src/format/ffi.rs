@@ -102,6 +102,13 @@ impl MarshalNumber for usize {
     }
 }
 
+impl MarshalNumber for i64 {
+    fn marshal_num(num: &serde_json::Number) -> Result<Self> {
+        num.as_i64()
+            .ok_or_else(|| Error::TypeError("an i64", Value::Number(num.clone())))
+    }
+}
+
 impl<'a, T, A> TryFrom<Input<'a>> for (&'a Context, T, A)
 where
     T: MarshalTopic<'a>,

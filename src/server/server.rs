@@ -272,12 +272,18 @@ impl Server {
                             .map_or_else(String::new, Into::into);
                         let ident = p.identity(&*self.conn).await?;
 
+                        let pos = p.position(&*self.conn).await.ok();
+
                         meta.insert(crate::metadata::PLAYER_BUS.into(), Variant(Box::new(bus)));
 
                         meta.insert(
                             crate::metadata::PLAYER_IDENTITY.into(),
                             Variant(Box::new(ident)),
                         );
+
+                        if let Some(pos) = pos {
+                            meta.insert(crate::metadata::POSITION.into(), Variant(Box::new(pos)));
+                        }
 
                         (meta, p.status)
                     } else {

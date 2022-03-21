@@ -208,13 +208,13 @@ impl Player {
         self,
         conn: &SyncConnection,
         id: Path<'_>,
-        secs: f64,
+        secs: i64,
     ) -> Result<Self> {
         self.call(
             &*mpris::player::INTERFACE,
             &*mpris::player::SET_POSITION,
             conn,
-            (id, (secs * 1e6).round() as i64),
+            (id, secs),
         )
         .await?;
 
@@ -267,10 +267,9 @@ impl Player {
     }
 
     #[allow(clippy::cast_precision_loss)]
-    pub async fn position(&self, conn: &SyncConnection) -> Result<f64> {
+    pub async fn position(&self, conn: &SyncConnection) -> Result<i64> {
         self.get(&*mpris::player::INTERFACE, &*mpris::player::POSITION, conn)
             .await
-            .map(|u: i64| u as f64 / 1e6)
     }
 
     pub async fn can_go_next(&self, conn: &SyncConnection) -> Result<bool> {
@@ -374,13 +373,14 @@ impl Player {
         )
     }
 
+    #[allow(clippy::cast_precision_loss, clippy::cast_possible_truncation)]
     pub async fn try_seek(self, conn: &SyncConnection, to: Offset) -> Result<Option<(Self, f64)>> {
         Ok(if self.can_seek(conn).await? {
             let meta = self.metadata(conn).await?;
 
             let pos = match to {
-                Offset::Relative(p) => self.position(conn).await? + p,
-                Offset::Absolute(p) => p,
+                Offset::Relative(p) => self.position(conn).await? + (p * 1e6).round() as i64,
+                Offset::Absolute(p) => (p * 1e6).round() as i64,
             };
 
             Some((
@@ -396,7 +396,7 @@ impl Player {
                     pos,
                 )
                 .await?,
-                pos,
+                pos as f64 / 1e6,
             ))
         } else {
             None

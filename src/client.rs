@@ -6,7 +6,7 @@ use dbus::{
     nonblock::{Proxy, SyncConnection},
 };
 use dbus_tokio::connection;
-use log::{info, warn};
+use log::{info, trace, warn};
 use serde::Serialize;
 use tokio::{select, sync::oneshot, task};
 
@@ -31,6 +31,8 @@ struct NowPlayingResult {
     title: Option<String>,
     artist: Option<Vec<String>>,
     album: Option<String>,
+    length: Option<i64>,
+    position: Option<i64>,
 }
 
 impl TryFrom<NowPlayingResponse> for NowPlayingResult {
@@ -59,6 +61,12 @@ impl TryFrom<NowPlayingResponse> for NowPlayingResult {
         let album = map
             .remove(mpris::track_list::ATTR_ALBUM)
             .and_then(|Variant(v)| v.as_str().map(ToOwned::to_owned));
+        let length = map
+            .remove(mpris::track_list::ATTR_LENGTH)
+            .and_then(|Variant(v)| v.as_i64());
+        let position = map
+            .remove(crate::metadata::POSITION)
+            .and_then(|Variant(v)| v.as_i64());
 
         let _: PlaybackStatus = status.parse()?;
 
@@ -68,6 +76,8 @@ impl TryFrom<NowPlayingResponse> for NowPlayingResult {
             title,
             artist,
             album,
+            length,
+            position,
         })
     }
 }
@@ -109,6 +119,9 @@ pub(super) async fn run(cmd: ClientCommand) -> Result {
                 format,
             } => {
                 let resp: NowPlayingResponse = try_send(&proxy, id, ()).await?;
+
+                trace!("Full now-playing response: {:?}", resp);
+
                 let resp: NowPlayingResult = resp.try_into()?;
 
                 if let Some(format) = format {

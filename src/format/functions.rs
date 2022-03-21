@@ -1,6 +1,7 @@
 use std::{
     borrow::Cow::{Borrowed, Owned},
     collections::HashMap,
+    fmt::Write,
 };
 
 use anyhow::Context;
@@ -17,12 +18,14 @@ pub type Functions = HashMap<&'static str, Function>;
 pub fn all() -> Functions {
     vec![
         ("compact", compact as Function),
+        ("eta", eta),
         ("join", join),
         ("json", json),
         ("lower", lower),
         ("shorten", shorten),
         ("shortenMid", shorten_mid),
         ("sym", sym),
+        ("time", time),
         ("trim", trim),
         ("upper", upper),
         ("xml", xml),
@@ -32,6 +35,29 @@ pub fn all() -> Functions {
 }
 
 //// Helper functions
+
+fn hmss_usec(mut us: i64, neg_zero: bool) -> String {
+    let mut s = String::new();
+
+    if us < 0 || us == 0 && neg_zero {
+        s.push('-');
+        us = -us;
+    }
+
+    let mut sec = us / 1_000_000;
+    let mut min = sec / 60;
+    sec %= 60;
+    let hr = min / 60;
+    min %= 60;
+
+    if hr > 0 {
+        write!(s, "{:01}:{:02}:{:02}", hr, min, sec).unwrap();
+    } else {
+        write!(s, "{:01}:{:02}", min, sec).unwrap();
+    }
+
+    s
+}
 
 #[inline]
 fn stream_str(inp: Input, f: impl FnOnce(String) -> String) -> Output {
@@ -80,6 +106,12 @@ fn compact(inp: Input) -> Output {
         Owned(a) => a.into_iter().filter(|e| !is_null_like(e)).collect(),
         Borrowed(a) => a.iter().cloned().filter(|e| !is_null_like(e)).collect(),
     }))
+}
+
+fn eta(inp: Input) -> Output {
+    let (_ctx, Topic(Number::<i64>(len)), (Number::<i64>(duration), ())) = inp.try_into()?;
+
+    Ok(Owned(Value::String(hmss_usec(len - duration, true))))
 }
 
 fn join(inp: Input) -> Output {
@@ -182,6 +214,12 @@ fn sym(inp: Input) -> Output {
         Ok(PlaybackStatus::Stopped) => "⏹".into(),
         Err(_) => s,
     })
+}
+
+fn time(inp: Input) -> Output {
+    let (_ctx, Topic(Number::<i64>(len)), ()) = inp.try_into()?;
+
+    Ok(Owned(Value::String(hmss_usec(len, false))))
 }
 
 fn trim(inp: Input) -> Output { stream_str(inp, |s| s.trim().to_owned()) }
