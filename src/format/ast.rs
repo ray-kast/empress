@@ -44,8 +44,8 @@ impl<'a, 's> Eval<'a> for Expr<'s> {
 
 #[derive(Debug)]
 pub enum NullChain<'a> {
-    Chain(Box<NullChain<'a>>, Pipeline<'a>),
-    Pipe(Pipeline<'a>),
+    Chain(Box<NullChain<'a>>, NullPipeline<'a>),
+    Bang(NullPipeline<'a>),
 }
 
 impl<'a, 's> Eval<'a> for NullChain<'s> {
@@ -53,10 +53,30 @@ impl<'a, 's> Eval<'a> for NullChain<'s> {
 
     fn eval(self, ctx: &'a Context, topic: Option<CowValue<'a>>) -> Result<CowValue<'a>> {
         match self {
-            Self::Chain(c, p) => match c.eval(ctx, topic.clone())? {
-                Borrowed(v) if is_null_like(v) => p.eval(ctx, topic),
-                Owned(v) if is_null_like(&v) => p.eval(ctx, topic),
+            Self::Chain(c, n) => match c.eval(ctx, topic.clone())? {
+                Borrowed(v) if is_null_like(v) => n.eval(ctx, topic),
+                Owned(v) if is_null_like(&v) => n.eval(ctx, topic),
                 v => Ok(v),
+            },
+            Self::Bang(n) => n.eval(ctx, topic),
+        }
+    }
+}
+
+#[derive(Debug)]
+pub enum NullPipeline<'a> {
+    Bang(Box<NullPipeline<'a>>, Pipeline<'a>),
+    Pipe(Pipeline<'a>),
+}
+
+impl<'a, 's> Eval<'a> for NullPipeline<'s> {
+    type Output = CowValue<'a>;
+
+    fn eval(self, ctx: &'a Context, topic: Option<CowValue<'a>>) -> Result<CowValue<'a>> {
+        match self {
+            Self::Bang(n, p) => match n.eval(ctx, topic)? {
+                v @ (Owned(Value::Null) | Borrowed(Value::Null)) => Ok(v),
+                v => p.eval(ctx, Some(v)),
             },
             Self::Pipe(p) => p.eval(ctx, topic),
         }

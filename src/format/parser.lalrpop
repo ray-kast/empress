@@ -13,6 +13,7 @@ extern {
 
     "." => lexer::Token::Dot,
     "," => lexer::Token::Comma,
+    "|!" => lexer::Token::PipeBang,
     "|" => lexer::Token::Pipe,
     "??" => lexer::Token::Coalesce,
     "(" => lexer::Token::LParen,
@@ -39,8 +40,13 @@ Expr: ast::Expr<'i> = {
 };
 
 NullChain: ast::NullChain<'i> = {
-  <l:NullChain> "??" <r:Pipeline> => ast::NullChain::Chain(Box::new(l), r),
-  Pipeline => ast::NullChain::Pipe(<>),
+  <l:NullChain> "??" <r:NullPipeline> => ast::NullChain::Chain(Box::new(l), r),
+  NullPipeline => ast::NullChain::Bang(<>),
+};
+
+NullPipeline: ast::NullPipeline<'i> = {
+  <l:NullPipeline> "|!" <r:Pipeline> => ast::NullPipeline::Bang(Box::new(l), r),
+  Pipeline => ast::NullPipeline::Pipe(<>),
 };
 
 Pipeline: ast::Pipeline<'i> = {
