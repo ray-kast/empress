@@ -10,7 +10,7 @@ pub enum Error {
     #[error("Expected {0} argument(s), got {1}")]
     Arity(usize, usize),
     #[error("Type error: expected {0}, got {}", json(.1))]
-    TypeError(&'static str, Value),
+    Type(&'static str, Value),
     #[error("Expected a pipe input, got nothing")]
     NoTopic,
     #[error("Unexpected pipe input")]
@@ -25,7 +25,7 @@ impl From<StreamError> for Error {
             StreamError::Io(e) => {
                 Self::Other(anyhow::Error::new(e).context("I/O error while printing a value"))
             },
-            StreamError::Unprintable(v) => Self::TypeError("a printable value", v),
+            StreamError::Unprintable(v) => Self::Type("a printable value", v),
         }
     }
 }
@@ -98,14 +98,14 @@ impl MarshalNumber for usize {
     fn marshal_num(num: &serde_json::Number) -> Result<Self> {
         num.as_u64()
             .and_then(|n| usize::try_from(n).ok())
-            .ok_or_else(|| Error::TypeError("a usize", Value::Number(num.clone())))
+            .ok_or_else(|| Error::Type("a usize", Value::Number(num.clone())))
     }
 }
 
 impl MarshalNumber for i64 {
     fn marshal_num(num: &serde_json::Number) -> Result<Self> {
         num.as_i64()
-            .ok_or_else(|| Error::TypeError("an i64", Value::Number(num.clone())))
+            .ok_or_else(|| Error::Type("an i64", Value::Number(num.clone())))
     }
 }
 
@@ -168,7 +168,7 @@ impl<'a> TryFrom<CowValue<'a>> for Array<'a> {
         match val {
             Borrowed(Value::Array(v)) => Ok(Self(Borrowed(v))),
             Owned(Value::Array(v)) => Ok(Self(Owned(v))),
-            v => Err(Error::TypeError("an array", v.into_owned())),
+            v => Err(Error::Type("an array", v.into_owned())),
         }
     }
 }
@@ -181,7 +181,7 @@ impl<'a, T: MarshalNumber> TryFrom<CowValue<'a>> for Number<T> {
     fn try_from(val: CowValue<'a>) -> Result<Self> {
         match val.as_ref() {
             Value::Number(n) => T::marshal_num(n).map(Self),
-            _ => Err(Error::TypeError("a number", val.into_owned())),
+            _ => Err(Error::Type("a number", val.into_owned())),
         }
     }
 }

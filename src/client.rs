@@ -1,6 +1,6 @@
 use std::{io, sync::Arc, time::Duration};
 
-use anyhow::{anyhow, Context, Error};
+use anyhow::{Context, Error};
 use dbus::{
     arg::{AppendAll, ReadAll, RefArg, Variant},
     nonblock::{Proxy, SyncConnection},
@@ -19,8 +19,8 @@ use crate::{
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct NowPlayingPlayer {
-    bus: String,
-    id: String,
+    bus: Option<String>,
+    id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -41,12 +41,10 @@ impl TryFrom<NowPlayingResponse> for NowPlayingResult {
     fn try_from((mut map, status): NowPlayingResponse) -> Result<Self> {
         let bus = map
             .remove(crate::metadata::PLAYER_BUS)
-            .and_then(|Variant(v)| v.as_str().map(ToOwned::to_owned))
-            .ok_or_else(|| anyhow!("failed to get player bus"))?;
+            .and_then(|Variant(v)| v.as_str().map(ToOwned::to_owned));
         let id = map
             .remove(crate::metadata::PLAYER_IDENTITY)
-            .and_then(|Variant(v)| v.as_str().map(ToOwned::to_owned))
-            .ok_or_else(|| anyhow!("failed to get player identity"))?;
+            .and_then(|Variant(v)| v.as_str().map(ToOwned::to_owned));
         let title = map
             .remove(mpris::track_list::ATTR_TITLE)
             .and_then(|Variant(v)| v.as_str().map(ToOwned::to_owned));

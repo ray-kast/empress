@@ -259,27 +259,30 @@ impl Server {
                                         .map_or(false, |p| p == *mpris::track_list::NO_TRACK))
                             });
 
+                    let bus = p
+                        .bus
+                        .strip_prefix(&**mpris::BUS_NAME)
+                        .and_then(|s| s.strip_prefix('.'))
+                        .map_or_else(String::new, Into::into);
+                    let ident = p.identity(&*self.conn).await?;
+
+                    // Properties that should go into the map regardless of if we have a track
+                    let extra_props: [(String, Variant<Box<dyn RefArg>>); 2] = [
+                        (crate::metadata::PLAYER_BUS.into(), Variant(Box::new(bus))),
+                        (
+                            crate::metadata::PLAYER_IDENTITY.into(),
+                            Variant(Box::new(ident)),
+                        ),
+                    ];
+
                     Ok(Some(if has_track {
                         let mut meta: HashMap<_, _> = meta
                             .into_iter()
                             .map(|(k, Variant(v))| (k, Variant(v.box_clone())))
+                            .chain(extra_props)
                             .collect();
 
-                        let bus = p
-                            .bus
-                            .strip_prefix(&**mpris::BUS_NAME)
-                            .and_then(|s| s.strip_prefix('.'))
-                            .map_or_else(String::new, Into::into);
-                        let ident = p.identity(&*self.conn).await?;
-
                         let pos = p.position(&*self.conn).await.ok();
-
-                        meta.insert(crate::metadata::PLAYER_BUS.into(), Variant(Box::new(bus)));
-
-                        meta.insert(
-                            crate::metadata::PLAYER_IDENTITY.into(),
-                            Variant(Box::new(ident)),
-                        );
 
                         if let Some(pos) = pos {
                             meta.insert(crate::metadata::POSITION.into(), Variant(Box::new(pos)));
@@ -287,7 +290,7 @@ impl Server {
 
                         (meta, p.status)
                     } else {
-                        (HashMap::new(), p.status)
+                        (extra_props.into_iter().collect(), p.status)
                     }))
                 })
                 .map_ok(|ok| {
