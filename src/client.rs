@@ -1,9 +1,8 @@
-use std::{io, sync::Arc, time::Duration};
+use std::{io, time::Duration};
 
 use anyhow::{Context, Error};
 use log::{info, trace, warn};
 use serde::Serialize;
-use tokio::{select, sync::oneshot, task};
 use zbus::zvariant;
 
 use crate::{
@@ -11,7 +10,7 @@ use crate::{
     interface::{
         metadata, mpris, DaemonProxy, NowPlayingResponse, PlaybackStatus, SERVER_NAME, SERVER_PATH,
     },
-    ClientCommand, Offset, PlayerSearchOpts, Result,
+    ClientCommand, Offset, Result,
 };
 
 #[derive(Debug, Clone, Serialize)]
@@ -75,6 +74,82 @@ impl TryFrom<NowPlayingResponse> for NowPlayingResult {
     }
 }
 
+enum Continuation {
+    ListPlayers(Vec<(String, PlaybackStatus)>),
+    NowPlaying {
+        format: Option<String>,
+        resp: NowPlayingResponse,
+    },
+    Seeked(f64),
+    VolumeSet(f64),
+}
+
+// Hack to make handle_command less annoying to write
+trait Continue {
+    fn k(self) -> zbus::Result<Option<Continuation>>;
+}
+
+impl Continue for zbus::Result<()> {
+    fn k(self) -> zbus::Result<Option<Continuation>> { self.map(|()| None) }
+}
+
+async fn handle_command(
+    cmd: ClientCommand,
+    proxy: DaemonProxy<'_>,
+) -> Result<Option<Continuation>> {
+    const MAX_TRIES: usize = 5;
+
+    let mut res = Err(anyhow::anyhow!("Unreachable code detected"));
+
+    for i in 0..MAX_TRIES {
+        // TODO: Can this clone be removed without making the code a nightmare?
+        res = match cmd.clone() {
+            ClientCommand::ListPlayers => proxy
+                .list_players()
+                .await
+                .map(|list| Some(Continuation::ListPlayers(list))),
+            ClientCommand::Next(search) => proxy.next(search.into()).await.k(),
+            ClientCommand::NowPlaying { search, format } => proxy
+                .now_playing(search.into())
+                .await
+                .map(|resp| Some(Continuation::NowPlaying { format, resp })),
+            ClientCommand::Pause(search) => proxy.pause(search.into()).await.k(),
+            ClientCommand::Play(search) => proxy.play(search.into()).await.k(),
+            ClientCommand::PlayPause(search) => proxy.play_pause(search.into()).await.k(),
+            ClientCommand::Previous(search) => proxy.previous(search.into()).await.k(),
+            ClientCommand::Seek { search, pos } => match pos {
+                Offset::Absolute(to) => proxy.seek_absolute(search.into(), to).await,
+                Offset::Relative(by) => proxy.seek_relative(search.into(), by).await,
+            }
+            .map(|pos| Some(Continuation::Seeked(pos))),
+            ClientCommand::Stop(search) => proxy.stop(search.into()).await.k(),
+            ClientCommand::SwitchCurrent { to, no_play } => {
+                proxy.switch_current(to, !no_play).await.k()
+            },
+            ClientCommand::Volume { search, vol } => match vol {
+                Offset::Absolute(to) => proxy.vol_absolute(search.into(), to).await,
+                Offset::Relative(by) => proxy.vol_relative(search.into(), by).await,
+            }
+            .map(|vol| Some(Continuation::VolumeSet(vol))),
+        }
+        .context("Failed to contact D-Bus daemon");
+
+        if let Err(ref e) = res {
+            warn!("{:?}", e);
+        } else {
+            return res;
+        }
+
+        info!("Retrying (attempt {})...", i + 1);
+
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+
+    assert!(res.is_err());
+
+    res
+}
+
 pub(super) async fn run(cmd: ClientCommand) -> Result {
     let conn = zbus::Connection::session()
         .await
@@ -87,155 +162,35 @@ pub(super) async fn run(cmd: ClientCommand) -> Result {
         .await
         .context("Failed to create D-Bus daemon proxy")?;
 
-    // TODO: handle retry logic
+    let k = match handle_command(cmd, proxy).await? {
+        Some(c) => c,
+        None => return Ok(()),
+    };
 
-    match cmd {
-        ClientCommand::ListPlayers => proxy.list_players().await.and_then(|list| {
-            todo!();
-        }),
-        ClientCommand::Next(search) => proxy.next(search.into()).await,
-        ClientCommand::NowPlaying { search, format } => {
-            proxy.now_playing(search.into()).await.and_then(|resp| {
-                todo!();
-            })
+    match k {
+        Continuation::ListPlayers(list) => {
+            for (player, status) in list {
+                println!("{}\t{}", player, status);
+            }
         },
-        ClientCommand::Pause(search) => proxy.pause(search.into()).await,
-        ClientCommand::Play(search) => {
-            info!("yo waddup");
-            let x = proxy.play(search.into()).await;
-            info!("nice {:?}", x);
-            x
+        Continuation::NowPlaying { format, resp } => {
+            trace!("Full now-playing response: {:?}", resp);
+
+            let resp: NowPlayingResult = resp.try_into()?;
+
+            if let Some(format) = format {
+                print!("{}", format::eval(format, resp)?);
+            } else {
+                serde_json::to_writer(io::stdout(), &resp)?;
+            }
+
+            if atty::is(atty::Stream::Stdout) {
+                println!();
+            }
         },
-        ClientCommand::PlayPause(search) => proxy.play_pause(search.into()).await,
-        ClientCommand::Previous(search) => proxy.previous(search.into()).await,
-        ClientCommand::Seek { search, pos } => match pos {
-            Offset::Absolute(to) => proxy.seek_absolute(search.into(), to).await,
-            Offset::Relative(by) => proxy.seek_relative(search.into(), by).await,
-        }
-        .and_then(|pos| {
-            todo!();
-        }),
-        ClientCommand::Stop(search) => proxy.stop(search.into()).await,
-        ClientCommand::SwitchCurrent { to, no_play } => proxy.switch_current(to, !no_play).await,
-        ClientCommand::Volume { search, vol } => match vol {
-            Offset::Absolute(to) => proxy.vol_absolute(search.into(), to).await,
-            Offset::Relative(by) => proxy.vol_relative(search.into(), by).await,
-        }
-        .and_then(|vol| {
-            todo!();
-        }),
+        Continuation::Seeked(pos) => print!("{}", pos),
+        Continuation::VolumeSet(vol) => print!("{}", vol),
     }
-    .context("Failed to contact D-Bus daemon")
 
-    // task::spawn(async {
-    //     close_tx
-    //         .send(Error::from(res.await).context("D-Bus disconnected"))
-    //         .ok();
-    // });
-
-    // let run = async move {
-    //     let proxy = Proxy::new(&*SERVER_NAME, &*SERVER_PATH,
-    // Duration::from_secs(2), conn);
-
-    //     let id = cmd.id();
-
-    //     match cmd {
-    //         ClientCommand::Next(opts)
-    //         | ClientCommand::Previous(opts)
-    //         | ClientCommand::Pause(opts)
-    //         | ClientCommand::PlayPause(opts)
-    //         | ClientCommand::Stop(opts)
-    //         | ClientCommand::Play(opts) => {
-    //             let PlayerOpts {} = opts;
-    //             try_send(&proxy, id, ()).await?;
-    //         },
-    //         ClientCommand::ListPlayers => {
-    //             let (players,): (Vec<(String, String)>,) = try_send(&proxy,
-    // id, ()).await?;
-
-    //             for (player, status) in players {
-    //                 println!("{}\t{}", player, status);
-    //             }
-    //         },
-    //         ClientCommand::NowPlaying {
-    //             player: PlayerOpts {},
-    //             format,
-    //         } => {
-    //             let resp: NowPlayingResponse = try_send(&proxy, id,
-    // ()).await?;
-
-    //             trace!("Full now-playing response: {:?}", resp);
-
-    //             let resp: NowPlayingResult = resp.try_into()?;
-
-    //             if let Some(format) = format {
-    //                 print!("{}", format::eval(format, resp)?);
-    //             } else {
-    //                 serde_json::to_writer(io::stdout(), &resp)?;
-    //             }
-
-    //             if atty::is(atty::Stream::Stdout) {
-    //                 println!();
-    //             }
-    //         },
-    //         ClientCommand::Seek {
-    //             player: PlayerOpts {},
-    //             to,
-    //         } => {
-    //             try_send(&proxy, id, (to.offset(),)).await?;
-    //         },
-    //         ClientCommand::Volume {
-    //             player: PlayerOpts {},
-    //             vol,
-    //         } => {
-    //             let (vol,): (f64,) = try_send(&proxy, id,
-    // (vol.offset(),)).await?;
-
-    //             print!("{}", vol);
-
-    //             if atty::is(atty::Stream::Stdout) {
-    //                 println!();
-    //             }
-    //         },
-    //         ClientCommand::SwitchCurrent { to, no_play } => {
-    //             let switch_playing = !no_play;
-    //             try_send(&proxy, id, (to, switch_playing)).await?;
-    //         },
-    //     }
-
-    //     Ok(())
-    // };
-
-    // select!(
-    //     res = run => res,
-    //     err = close_rx => Err(
-    //         err.context("lost D-Bus connection resource").map_or_else(|e| e,
-    // |e| e)     ),
-    // )
+    Ok(())
 }
-
-// async fn try_send<R: ReadAll + 'static, A: AppendAll + Clone>(
-//     proxy: &Proxy<'_, Arc<SyncConnection>>,
-//     method: MethodId,
-//     args: A,
-// ) -> Result<R> {
-//     const MAX_TRIES: usize = 5;
-
-//     let method = method.to_string();
-//     let mut i = 0;
-
-//     loop {
-//         match proxy
-//             .method_call(&*INTERFACE_NAME, &method, args.clone())
-//             .await
-//         {
-//             Err(e) if i < MAX_TRIES => warn!("Request failed: {}", e),
-//             r => break r.context("failed to contact empress server"),
-//         }
-
-//         i += 1;
-//         info!("Retry attempt {}", i);
-
-//         tokio::time::sleep(Duration::from_millis(20)).await;
-//     }
-// }

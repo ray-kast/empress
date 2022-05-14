@@ -1,9 +1,6 @@
 use lazy_static::lazy_static;
 use zbus::{
-    dbus_interface, dbus_proxy,
-    names::{OwnedInterfaceName, OwnedWellKnownName},
-    zvariant,
-    zvariant::OwnedObjectPath,
+    dbus_interface, dbus_proxy, names::OwnedWellKnownName, zvariant, zvariant::OwnedObjectPath,
 };
 
 pub mod mpris;
@@ -36,7 +33,16 @@ lazy_static! {
 type ZResult<T = ()> = zbus::Result<T>;
 
 #[derive(
-    Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize, zvariant::Type,
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Hash,
+    serde::Serialize,
+    serde::Deserialize,
+    strum::Display,
+    zvariant::Type,
 )]
 pub enum PlaybackStatus {
     Playing,
@@ -53,11 +59,7 @@ pub type NowPlayingMeta = std::collections::HashMap<String, zvariant::OwnedValue
 
 pub type NowPlayingResponse = (NowPlayingMeta, PlaybackStatus);
 
-#[dbus_proxy(
-    interface = "net.ryan_s.Empress1.Daemon",
-    default_service = "net.ryan_s.Empress1",
-    default_path = "/net/ryan_s/Empress1/Daemon"
-)]
+#[dbus_proxy(interface = "net.ryan_s.Empress1.Daemon")]
 trait Daemon {
     fn list_players(&self) -> ZResult<Vec<(String, PlaybackStatus)>> {}
 
