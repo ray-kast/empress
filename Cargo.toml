@@ -21,9 +21,6 @@ lto = "thin"
 anyhow = "1.0.55"
 atty = "0.2.14"
 clap = { version = "3.1.2", features = ["derive"] }
-dbus = "0.9.5"
-dbus-crossroads = "0.5.0"
-dbus-tokio = "0.7.5"
 env_logger = "0.9.0"
 futures = "0.3.21"
 lalrpop-util = { version = "0.19.7", features = ["lexer"] }
@@ -35,7 +32,19 @@ serde = { version = "1.0.136", features = ["derive"] }
 serde_json = "1.0.79"
 strum = { version = "0.24.0", features = ["derive"] }
 thiserror = "1.0.30"
-tokio = { version = "1.17.0", features = ["macros", "rt", "signal", "sync"] }
+zbus = { version = "2.2.0", default-features = false, features = ["tokio"] }
+
+[dependencies.tokio]
+version = "1.18.2"
+features = [
+  "macros",
+  "net",
+  "parking_lot",
+  "rt",
+  "signal",
+  "sync",
+  "time",
+]
 
 [build-dependencies]
 lalrpop = "0.19.7"

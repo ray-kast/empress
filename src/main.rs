@@ -24,65 +24,10 @@ use tokio::runtime::Builder as RtBuilder;
 
 mod client;
 mod format;
+mod interface;
 mod server;
 
 type Result<T = (), E = Error> = std::result::Result<T, E>;
-
-#[cfg(debug_assertions)]
-lazy_static! {
-    static ref NAME_PREFIX: String = format!("net.ryan_s.debug.{}", *API_IDENT);
-    static ref PATH_PREFIX: String = format!("/net/ryan_s/debug/{}", *API_IDENT);
-}
-
-#[cfg(not(debug_assertions))]
-lazy_static! {
-    static ref NAME_PREFIX: String = format!("net.ryan_s.{}", *API_IDENT);
-    static ref PATH_PREFIX: String = format!("/net/ryan_s/{}", *API_IDENT);
-}
-
-lazy_static! {
-    static ref API_IDENT: String = format!("Empress{}", env!("CARGO_PKG_VERSION_MAJOR"));
-    static ref INTERFACE_NAME: String = format!("{}.Daemon", *NAME_PREFIX);
-    static ref SERVER_NAME: String = NAME_PREFIX.clone();
-    static ref SERVER_PATH: String = format!("{}/Daemon", *PATH_PREFIX);
-}
-
-pub(crate) mod metadata {
-    pub const PLAYER_BUS: &str = "empress:playerBus";
-    pub const PLAYER_IDENTITY: &str = "empress:playerIdentity";
-    pub const POSITION: &str = "empress:position";
-}
-
-#[derive(Debug, Clone, Copy, strum::Display)]
-enum MethodId {
-    /// List the players currently tracked by the daemon
-    ListPlayers,
-    /// Skip one track forwards
-    Next,
-    /// Print information about the current track
-    NowPlaying,
-    /// Skip one track backwards
-    Previous,
-    /// Pause a currently-playing player
-    Pause,
-    /// Like pause if a player is playing, otherwise like play
-    PlayPause,
-    /// Stop a currently-playing player
-    Stop,
-    /// Play a currently-paused player
-    Play,
-    /// Seek to a relative position on a player
-    SeekRelative,
-    /// Seek to an absolute position on a player
-    SeekAbsolute,
-    /// Set a player's volume relative to its current volume
-    VolRelative,
-    /// Set a player's volume to an absolute value
-    VolAbsolute,
-    /// Move a player to the top of the priority list, optionally pausing all
-    /// other players and playing the selected one
-    SwitchCurrent,
-}
 
 #[derive(Parser)]
 enum Opts {
@@ -115,12 +60,12 @@ enum ClientCommand {
     /// List the players currently tracked by the daemon
     ListPlayers,
     /// Skip one track forwards
-    Next(PlayerOpts),
+    Next(PlayerSearchOpts),
     /// Print information about the current track
     #[clap(long_about = include_str!("../etc/now_playing_long.txt"))]
     NowPlaying {
         #[clap(flatten)]
-        player: PlayerOpts,
+        search: PlayerSearchOpts,
 
         /// Instead of outputting JSON, output a plaintext string with the given
         /// format.  See the full help for this command for a syntax reference.
@@ -128,28 +73,28 @@ enum ClientCommand {
         format: Option<String>,
     },
     /// Skip one track backwards
-    Previous(PlayerOpts),
+    Previous(PlayerSearchOpts),
     /// Pause a currently-playing player
-    Pause(PlayerOpts),
+    Pause(PlayerSearchOpts),
     /// Like pause if a player is playing, otherwise like play
-    PlayPause(PlayerOpts),
+    PlayPause(PlayerSearchOpts),
     /// Stop a currently-playing player
-    Stop(PlayerOpts),
+    Stop(PlayerSearchOpts),
     /// Play a currently-paused player
-    Play(PlayerOpts),
+    Play(PlayerSearchOpts),
     /// Seek to a position on a player
     Seek {
         #[clap(flatten)]
-        player: PlayerOpts,
+        search: PlayerSearchOpts,
 
         /// The position to seek to, either absolute (e.g. 5) or relative (e.g.
         /// 5+ or 5-)
-        to: Offset,
+        pos: Offset,
     },
     /// Get or set the volume on a player
     Volume {
         #[clap(flatten)]
-        player: PlayerOpts,
+        search: PlayerSearchOpts,
 
         /// The volume as a number between 0.0 and 1.0, either absolute (e.g.
         /// 0.5) or relative (e.g. 0.1+ or 0.1-).  If no value is given
@@ -174,40 +119,12 @@ enum ClientCommand {
     },
 }
 
-impl ClientCommand {
-    pub fn id(&self) -> MethodId {
-        match self {
-            Self::ListPlayers => MethodId::ListPlayers,
-            Self::Next(..) => MethodId::Next,
-            Self::NowPlaying { .. } => MethodId::NowPlaying,
-            Self::Previous(..) => MethodId::Previous,
-            Self::Pause(..) => MethodId::Pause,
-            Self::PlayPause(..) => MethodId::PlayPause,
-            Self::Stop(..) => MethodId::Stop,
-            Self::Play(..) => MethodId::Play,
-            Self::Seek {
-                to: Offset::Relative(..),
-                ..
-            } => MethodId::SeekRelative,
-            Self::Seek {
-                to: Offset::Absolute(..),
-                ..
-            } => MethodId::SeekAbsolute,
-            Self::Volume {
-                vol: Offset::Relative(..),
-                ..
-            } => MethodId::VolRelative,
-            Self::Volume {
-                vol: Offset::Absolute(..),
-                ..
-            } => MethodId::VolAbsolute,
-            Self::SwitchCurrent { .. } => MethodId::SwitchCurrent,
-        }
-    }
-}
-
 #[derive(Debug, Clone, Parser)]
-struct PlayerOpts {} // WARNING: DO NOT TOUCH WITHOUT INCREMENTING MAJOR VERSION
+struct PlayerSearchOpts {}
+
+impl From<PlayerSearchOpts> for interface::PlayerSearchOpts {
+    fn from(PlayerSearchOpts {}: PlayerSearchOpts) -> Self { Self {} }
+}
 
 #[derive(Debug, Clone, Copy)]
 enum Offset {

@@ -11,7 +11,7 @@ use super::{
     ffi::{Any, Array, Error, Function, Input, Number, Output, Result, Topic},
     interp::{is_null_like, Stream, StreamString, Value},
 };
-use crate::server::mpris::player::PlaybackStatus;
+use crate::interface::PlaybackStatus;
 
 pub type Functions = HashMap<&'static str, Function>;
 
@@ -208,12 +208,18 @@ fn shorten_mid(inp: Input) -> Output {
 }
 
 fn sym(inp: Input) -> Output {
-    stream_str(inp, |s| match s.parse() {
+    use serde::Deserialize;
+
+    let (_ctx, Topic(Any(v)), ()) = inp.try_into()?;
+
+    let s = match PlaybackStatus::deserialize(v.as_ref()) {
         Ok(PlaybackStatus::Playing) => "▶".into(),
         Ok(PlaybackStatus::Paused) => "⏸".into(),
         Ok(PlaybackStatus::Stopped) => "⏹".into(),
-        Err(_) => s,
-    })
+        Err(_) => v.stream_string(())?,
+    };
+
+    Ok(Owned(Value::String(s)))
 }
 
 fn time(inp: Input) -> Output {
