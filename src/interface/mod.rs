@@ -1,7 +1,13 @@
+use std::sync::Arc;
+
 use lazy_static::lazy_static;
+pub use zbus::fdo::Error;
 use zbus::{
     dbus_interface, dbus_proxy, names::OwnedWellKnownName, zvariant, zvariant::OwnedObjectPath,
+    Connection,
 };
+
+use crate::server::Handler;
 
 pub mod mpris;
 
@@ -30,6 +36,7 @@ lazy_static! {
         format!("{}/Daemon", *PATH_PREFIX).try_into().unwrap();
 }
 
+pub type Result<T = ()> = zbus::fdo::Result<T>;
 type ZResult<T = ()> = zbus::Result<T>;
 
 #[derive(
@@ -38,6 +45,8 @@ type ZResult<T = ()> = zbus::Result<T>;
     Copy,
     PartialEq,
     Eq,
+    PartialOrd,
+    Ord,
     Hash,
     serde::Serialize,
     serde::Deserialize,
@@ -61,11 +70,11 @@ pub type NowPlayingResponse = (NowPlayingMeta, PlaybackStatus);
 
 #[dbus_proxy(interface = "net.ryan_s.Empress1.Daemon")]
 trait Daemon {
-    fn list_players(&self) -> ZResult<Vec<(String, PlaybackStatus)>> {}
+    fn list_players(&self) -> ZResult<Vec<(String, PlaybackStatus)>>;
 
     fn next(&self, search: PlayerSearchOpts) -> ZResult;
 
-    fn now_playing(&self, search: PlayerSearchOpts) -> ZResult<NowPlayingResponse> {}
+    fn now_playing(&self, search: PlayerSearchOpts) -> ZResult<NowPlayingResponse>;
 
     fn pause(&self, search: PlayerSearchOpts) -> ZResult;
 
@@ -88,33 +97,125 @@ trait Daemon {
     fn vol_relative(&self, search: PlayerSearchOpts, by: f64) -> ZResult<f64>;
 }
 
-pub struct Daemon;
+pub struct Daemon(pub Arc<Handler>);
 
 #[dbus_interface(interface = "net.ryan_s.Empress1.Daemon")]
 impl Daemon {
-    fn list_players(&self) -> Vec<(String, PlaybackStatus)> { todo!() }
+    async fn list_players(
+        &self,
+        #[zbus(connection)] conn: &Connection,
+    ) -> Result<Vec<(String, PlaybackStatus)>> {
+        self.0.handle(Handler::list_players, conn, ()).await
+    }
 
-    fn next(&self, search: PlayerSearchOpts) { todo!() }
+    async fn next(
+        &self,
+        #[zbus(connection)] conn: &Connection,
+        search: PlayerSearchOpts,
+    ) -> Result<()> {
+        self.0.handle(Handler::next, conn, search).await
+    }
 
-    fn now_playing(&self, search: PlayerSearchOpts) -> NowPlayingResponse { todo!() }
+    async fn now_playing(
+        &self,
+        #[zbus(connection)] conn: &Connection,
+        search: PlayerSearchOpts,
+    ) -> Result<NowPlayingResponse> {
+        self.0.handle(Handler::now_playing, conn, search).await
+    }
 
-    fn pause(&self, search: PlayerSearchOpts) { todo!() }
+    async fn pause(
+        &self,
+        #[zbus(connection)] conn: &Connection,
+        search: PlayerSearchOpts,
+    ) -> Result<()> {
+        self.0.handle(Handler::pause, conn, search).await
+    }
 
-    fn play(&self, search: PlayerSearchOpts) { todo!() }
+    async fn play(
+        &self,
+        #[zbus(connection)] conn: &Connection,
+        search: PlayerSearchOpts,
+    ) -> Result<()> {
+        self.0.handle(Handler::play, conn, search).await
+    }
 
-    fn play_pause(&self, search: PlayerSearchOpts) { todo!() }
+    async fn play_pause(
+        &self,
+        #[zbus(connection)] conn: &Connection,
+        search: PlayerSearchOpts,
+    ) -> Result<()> {
+        self.0.handle(Handler::play_pause, conn, search).await
+    }
 
-    fn previous(&self, search: PlayerSearchOpts) { todo!() }
+    async fn previous(
+        &self,
+        #[zbus(connection)] conn: &Connection,
+        search: PlayerSearchOpts,
+    ) -> Result<()> {
+        self.0.handle(Handler::previous, conn, search).await
+    }
 
-    fn seek_absolute(&self, search: PlayerSearchOpts, to: f64) { todo!() }
+    async fn seek_absolute(
+        &self,
+        #[zbus(connection)] conn: &Connection,
+        search: PlayerSearchOpts,
+        to: f64,
+    ) -> Result<f64> {
+        self.0
+            .handle(Handler::seek_absolute, conn, (search, to))
+            .await
+    }
 
-    fn seek_relative(&self, search: PlayerSearchOpts, by: f64) { todo!() }
+    async fn seek_relative(
+        &self,
+        #[zbus(connection)] conn: &Connection,
+        search: PlayerSearchOpts,
+        by: f64,
+    ) -> Result<f64> {
+        self.0
+            .handle(Handler::seek_relative, conn, (search, by))
+            .await
+    }
 
-    fn stop(&self, search: PlayerSearchOpts) { todo!() }
+    async fn stop(
+        &self,
+        #[zbus(connection)] conn: &Connection,
+        search: PlayerSearchOpts,
+    ) -> Result<()> {
+        self.0.handle(Handler::stop, conn, search).await
+    }
 
-    fn switch_current(&self, to: String, switch_playing: bool) { todo!() }
+    async fn switch_current(
+        &self,
+        #[zbus(connection)] conn: &Connection,
+        to: String,
+        switch_playing: bool,
+    ) -> Result<()> {
+        self.0
+            .handle(Handler::switch_current, conn, (to, switch_playing))
+            .await
+    }
 
-    fn vol_absolute(&self, search: PlayerSearchOpts, to: f64) { todo!() }
+    async fn vol_absolute(
+        &self,
+        #[zbus(connection)] conn: &Connection,
+        search: PlayerSearchOpts,
+        to: f64,
+    ) -> Result<f64> {
+        self.0
+            .handle(Handler::vol_absolute, conn, (search, to))
+            .await
+    }
 
-    fn vol_relative(&self, search: PlayerSearchOpts, by: f64) { todo!() }
+    async fn vol_relative(
+        &self,
+        #[zbus(connection)] conn: &Connection,
+        search: PlayerSearchOpts,
+        by: f64,
+    ) -> Result<f64> {
+        self.0
+            .handle(Handler::vol_relative, conn, (search, by))
+            .await
+    }
 }

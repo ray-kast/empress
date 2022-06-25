@@ -4,29 +4,26 @@ use std::{
     time::Instant,
 };
 
-use dbus::strings::BusName;
 use futures::{stream::FuturesUnordered, StreamExt};
 use log::{debug, trace, warn};
 use tokio::sync::RwLock;
+use zbus::names::OwnedBusName;
 
-use super::{mpris::player::PlaybackStatus, Player};
-use crate::Result;
+use super::player::Player;
+use crate::{interface::PlaybackStatus, server::player::OrdBusName, Result};
 
 #[derive(Debug)]
 pub(super) struct PlayerMap(
-    HashMap<BusName<'static>, (PlaybackStatus, Instant)>,
+    HashMap<OwnedBusName, (PlaybackStatus, Instant)>,
     BTreeSet<Player>,
 );
 
 impl PlayerMap {
-    pub async fn inform<
-        P: Fn(&BusName<'static>) -> PR + Copy,
-        PR: Future<Output = Result<Player>>,
-    >(
+    pub async fn inform<P: Future<Output = Result<Player>>>(
         this: &RwLock<Self>,
         try_patch: bool,
-        names: HashSet<BusName<'static>>,
-        player: P,
+        names: HashSet<OwnedBusName>,
+        player: impl Fn(zbus::names::BusName) -> P + Copy,
     ) {
         use std::collections::hash_map::Entry;
 
@@ -35,7 +32,7 @@ impl PlayerMap {
         if try_patch {
             let vec = names
                 .intersection(&key_set)
-                .map(|n| async move { (n, player(n).await) })
+                .map(|n| async move { (n, player(n.as_ref()).await) })
                 .collect::<FuturesUnordered<_>>()
                 .collect::<Vec<_>>()
                 .await;
@@ -68,7 +65,7 @@ impl PlayerMap {
             for name in names.symmetric_difference(&key_set) {
                 match this.0.entry(name.clone()) {
                     Entry::Vacant(v) => {
-                        let player = match player(v.key()).await {
+                        let player = match player(v.key().as_ref()).await {
                             Ok(p) => p,
                             Err(e) => {
                                 warn!("Constructing player failed: {:?}", e);
@@ -89,7 +86,7 @@ impl PlayerMap {
                         assert!(this.1.remove(&Player {
                             status,
                             last_update,
-                            bus
+                            bus: OrdBusName(bus),
                         }));
                     },
                 }
@@ -123,7 +120,7 @@ impl PlayerMap {
     pub fn put(&mut self, player: Player) -> bool {
         use std::collections::hash_map::Entry;
 
-        match self.0.entry(player.bus.clone()) {
+        match self.0.entry(player.bus.0.clone()) {
             Entry::Vacant(v) => {
                 trace!("Inserting new player into map: {:?}", player);
 
@@ -147,14 +144,14 @@ impl PlayerMap {
         }
     }
 
-    pub fn remove(&mut self, bus: &BusName<'static>) -> Option<Player> {
+    pub fn remove(&mut self, bus: &OwnedBusName) -> Option<Player> {
         if let Some((status, last_update)) = self.0.remove(bus) {
             trace!("Removing player from map: {:?}", bus);
 
             let ply = Player {
                 status,
                 last_update,
-                bus: bus.clone(),
+                bus: OrdBusName(bus.clone()),
             };
 
             assert!(self.1.remove(&ply));

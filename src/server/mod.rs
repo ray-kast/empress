@@ -5,12 +5,22 @@ use crate::{
     Result,
 };
 
-async fn connect() -> zbus::Result<zbus::Connection> {
-    zbus::ConnectionBuilder::session()?
+pub mod handler;
+pub(self) mod player;
+pub(self) mod player_map;
+
+pub use handler::Handler;
+
+async fn connect() -> zbus::Result<()> {
+    let handler = handler::Handler::new();
+
+    let conn = zbus::ConnectionBuilder::session()?
         .name(&*SERVER_NAME)?
-        .serve_at(&*SERVER_PATH, Daemon)?
+        .serve_at(&*SERVER_PATH, Daemon(handler))?
         .build()
-        .await
+        .await?;
+
+    Ok(())
 }
 
 pub async fn run() -> Result {

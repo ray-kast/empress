@@ -1,11 +1,12 @@
 #![allow(clippy::needless_borrow)] // Clippy bug
 
 use lazy_static::lazy_static;
+use zbus::{names::OwnedBusName, zvariant::OwnedObjectPath};
 
 lazy_static! {
     pub static ref NAME_PREFIX: String = "org.mpris.MediaPlayer2".into();
     pub static ref PATH_PREFIX: String = "/org/mpris/MediaPlayer2".into();
-    // pub static ref BUS_NAME: BusName<'static> = (&*NAME_PREFIX).into();
+    // pub static ref BUS_NAME: OwnedBusName = NAME_PREFIX.clone().try_into().unwrap();
     // pub static ref ENTRY_PATH: Path<'static> = (&*PATH_PREFIX).into();
 }
 
@@ -53,7 +54,7 @@ pub mod player {
 }
 
 pub mod track_list {
-    use super::lazy_static;
+    use super::{lazy_static, OwnedObjectPath};
 
     pub const ATTR_TRACKID: &str = "mpris:trackid";
     pub const ATTR_LENGTH: &str = "mpris:length";
@@ -63,6 +64,7 @@ pub mod track_list {
 
     lazy_static! {
         pub static ref PATH_PREFIX: String = format!("{}/TrackList", *super::PATH_PREFIX);
-        // pub static ref NO_TRACK: Path<'static> = format!("{}/NoTrack", *PATH_PREFIX).into();
+        pub static ref NO_TRACK: OwnedObjectPath =
+            format!("{}/NoTrack", *PATH_PREFIX).try_into().unwrap();
     }
 }
