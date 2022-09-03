@@ -43,24 +43,24 @@ pub(self) fn method_err(
 
 pub async fn run() -> Result {
     let conn = ConnectionBuilder::session()
-        .context("failed to create connection builder")?
+        .context("Failed to create connection builder")?
         .build()
         .await
-        .context("failed to connect to D-Bus")?;
+        .context("Failed to connect to D-Bus")?;
 
     conn.object_server()
         .at(&*SERVER_PATH, Server::new(conn.clone()).await?)
         .await
-        .context("failed to register server")?;
+        .context("Failed to register server")?;
 
     conn.request_name(&*SERVER_NAME)
         .await
-        .context("failed to request server name")?;
+        .context("Failed to request server name")?;
 
-    let mut hup = unix::signal(SignalKind::hangup()).context("failed to hook SIGHUP")?;
-    let mut int = unix::signal(SignalKind::interrupt()).context("failed to hook SIGINT")?;
-    let mut quit = unix::signal(SignalKind::quit()).context("failed to hook SIGQUIT")?;
-    let mut term = unix::signal(SignalKind::terminate()).context("failed to hook SIGTERM")?;
+    let mut hup = unix::signal(SignalKind::hangup()).context("Failed to hook SIGHUP")?;
+    let mut int = unix::signal(SignalKind::interrupt()).context("Failed to hook SIGINT")?;
+    let mut quit = unix::signal(SignalKind::quit()).context("Failed to hook SIGQUIT")?;
+    let mut term = unix::signal(SignalKind::terminate()).context("Failed to hook SIGTERM")?;
 
     select!(
         Some(()) = hup.recv() => (),

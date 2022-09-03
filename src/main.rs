@@ -258,7 +258,7 @@ impl ::std::str::FromStr for Offset {
         }
 
         if let Some(caps) = SEEK_PATTERN.captures(s) {
-            let time: f64 = caps[1].parse().context("invalid number for offset")?;
+            let time: f64 = caps[1].parse().context("Invalid number for offset")?;
 
             Ok(match caps.get(2).map(|c| c.as_str()) {
                 Some("-") => Offset::Relative(-time),
@@ -267,7 +267,7 @@ impl ::std::str::FromStr for Offset {
                 None => Offset::Absolute(time),
             })
         } else {
-            Err(anyhow!("invalid format for seek position"))
+            Err(anyhow!("Invalid format for seek position"))
         }
     }
 }
@@ -305,7 +305,7 @@ fn run() -> Result {
     let rt = RtBuilder::new_current_thread()
         .enable_all()
         .build()
-        .context("failed to start runtime")?;
+        .context("Failed to start runtime")?;
 
     let opts = Opts::parse();
 

@@ -34,7 +34,7 @@ impl<'a> Drop for SignalMatcher<'a> {
             .build()
             .unwrap()
             .block_on(async move { self.dbus.remove_match(&mem::take(&mut self.expr)).await })
-            .expect("removing signal listener failed");
+            .expect("Removing signal listener failed");
     }
 }
 
@@ -167,13 +167,13 @@ impl Server {
             "org.freedesktop.DBus",
         )
         .await
-        .context("failed to create root D-Bus proxy")?;
+        .context("Failed to create root D-Bus proxy")?;
 
         let now = Instant::now();
         let (names,): (Vec<String>,) = proxy
             .call("ListNames", &())
             .await
-            .context("failed to call ListNames")?;
+            .context("Failed to call ListNames")?;
 
         PlayerMap::inform(
             &self.shared.players,
@@ -183,7 +183,7 @@ impl Server {
                 .filter(|n| n.starts_with(mpris::BUS_NAME.as_str()))
                 .map(TryInto::try_into)
                 .collect::<Result<_, _>>()
-                .context("failed to parse player list")?,
+                .context("Failed to parse player list")?,
             |n| Player::new(now, n.clone(), conn),
         )
         .await;
@@ -212,14 +212,14 @@ impl Server {
                 },
                 Ok(None) => patch = Ok(None),
                 Err(e) => {
-                    warn!("processing player failed: {:?}", e);
+                    warn!("Processing player failed: {:?}", e);
                     patch = patch.map_err(|_| Some(()));
                 },
             }
         }
 
         if let Some((next, ret)) = patch
-            .or_else(|e| e.map_or(Ok(None), |()| Err(anyhow!("all players failed to process"))))?
+            .or_else(|e| e.map_or(Ok(None), |()| Err(anyhow!("All players failed to process"))))?
         {
             players.put(next);
 
@@ -241,13 +241,13 @@ impl Server {
                 ok @ Ok(Some(_)) => return ok,
                 Ok(None) => default = Ok(None),
                 Err(e) => {
-                    warn!("peeking player failed: {:?}", e);
+                    warn!("Peeking player failed: {:?}", e);
                     default = default.map_err(|_| Some(()));
                 },
             }
         }
 
-        default.or_else(|e| e.map_or(Ok(None), |()| Err(anyhow!("all players failed to peek"))))
+        default.or_else(|e| e.map_or(Ok(None), |()| Err(anyhow!("All players failed to peek"))))
     }
 
     async fn process_player<F: Fn(Player) -> FR, FR: Future<Output = Result<Option<Player>>>>(
@@ -273,7 +273,7 @@ impl Server {
     ) -> ZResult<T> {
         self.scan(conn, false)
             .await
-            .map_err(|e| method_err(id, e, "failed to scan for players"))?;
+            .map_err(|e| method_err(id, e, "Failed to scan for players"))?;
 
         f().await.map_err(|e| method_err(id, e, msg))
     }
@@ -304,7 +304,7 @@ impl Server {
                     })
                     .collect(),))
             },
-            "failed to list players",
+            "Failed to list players",
         )
         .await
     }
@@ -362,7 +362,7 @@ impl Server {
                     (map, status.to_string())
                 })
             },
-            "failed to get current track info",
+            "Failed to get current track info",
         )
         .await
     }
@@ -376,7 +376,7 @@ impl Server {
             conn,
             MethodId::Next,
             || self.process_player(|p| p.try_next(conn)).map_ok(|_| ()),
-            "failed to skip forward on a player",
+            "Failed to skip forward on a player",
         )
         .await
     }
@@ -390,7 +390,7 @@ impl Server {
             conn,
             MethodId::Previous,
             || self.process_player(|p| p.try_previous(conn)).map_ok(|_| ()),
-            "failed to skip backward on a player",
+            "Failed to skip backward on a player",
         )
         .await
     }
@@ -404,7 +404,7 @@ impl Server {
             conn,
             MethodId::Pause,
             || self.process_player(|p| p.try_pause(conn)).map_ok(|_| ()),
-            "failed to pause a player",
+            "Failed to pause a player",
         )
         .await
     }
@@ -421,7 +421,7 @@ impl Server {
                 self.process_player(|p| p.try_play_pause(conn))
                     .map_ok(|_| ())
             },
-            "failed to play or pause a player",
+            "Failed to play or pause a player",
         )
         .await
     }
@@ -435,7 +435,7 @@ impl Server {
             conn,
             MethodId::Stop,
             || self.process_player(|p| p.try_stop(conn)).map_ok(|_| ()),
-            "failed to stop a player",
+            "Failed to stop a player",
         )
         .await
     }
@@ -449,7 +449,7 @@ impl Server {
             conn,
             MethodId::Stop,
             || self.process_player(|p| p.try_play(conn)).map_ok(|_| ()),
-            "failed to play a player",
+            "Failed to play a player",
         )
         .await
     }
@@ -466,11 +466,11 @@ impl Server {
             || {
                 self.process_player_with(|p| p.try_seek(conn, Offset::Relative(to)))
                     .map(|p| {
-                        p?.ok_or_else(|| anyhow!("no players available to seek"))
+                        p?.ok_or_else(|| anyhow!("No players available to seek"))
                             .map(|p| (p,))
                     })
             },
-            "failed to seek a player",
+            "Failed to seek a player",
         )
         .await
     }
@@ -487,11 +487,11 @@ impl Server {
             || {
                 self.process_player_with(|p| p.try_seek(conn, Offset::Absolute(to)))
                     .map(|p| {
-                        p?.ok_or_else(|| anyhow!("no players available to seek"))
+                        p?.ok_or_else(|| anyhow!("No players available to seek"))
                             .map(|p| (p,))
                     })
             },
-            "failed to seek a player",
+            "Failed to seek a player",
         )
         .await
     }
@@ -508,11 +508,11 @@ impl Server {
             || {
                 self.process_player_with(|p| p.try_set_volume(conn, Offset::Relative(to)))
                     .map(|p| {
-                        p?.ok_or_else(|| anyhow!("no players available to get/adjust volume"))
+                        p?.ok_or_else(|| anyhow!("No players available to get/adjust volume"))
                             .map(|p| (p,))
                     })
             },
-            "failed to get/adjust a player's volume",
+            "Failed to get/adjust a player's volume",
         )
         .await
     }
@@ -529,11 +529,11 @@ impl Server {
             || {
                 self.process_player_with(|p| p.try_set_volume(conn, Offset::Absolute(to)))
                     .map(|p| {
-                        p?.ok_or_else(|| anyhow!("no players available to set volume"))
+                        p?.ok_or_else(|| anyhow!("No players available to set volume"))
                             .map(|p| (p,))
                     })
             },
-            "failed to set a player's volume",
+            "Failed to set a player's volume",
         )
         .await
     }
@@ -554,7 +554,7 @@ impl Server {
 
                 let curr = match self.shared.players.write().await.remove(&bus) {
                     Some(c) => c,
-                    None => return Err(anyhow!("no players stored with the given bus name")),
+                    None => return Err(anyhow!("No players stored with the given bus name")),
                 };
 
                 let mut curr = if switch_playing {
@@ -575,12 +575,12 @@ impl Server {
 
                         ply.pause(conn)
                             .await
-                            .context("failed to pause another player")?;
+                            .context("Failed to pause another player")?;
                     }
 
                     curr.play(conn)
                         .await
-                        .context("failed to play selected player")?
+                        .context("Failed to play selected player")?
                 } else {
                     curr
                 };
@@ -590,18 +590,8 @@ impl Server {
 
                 Ok(())
             },
-            "failed to switch the current player",
+            "Failed to switch the current player",
         )
         .await
     }
 }
-
-// impl Drop for Server {
-//     fn drop(&mut self) {
-//         tokio::runtime::Builder::new_current_thread()
-//             .build()
-//             .unwrap()
-//             .block_on(self.conn.remove_match(self.prop_changed.token()))
-//             .expect("removing PropertiesChanged listener failed");
-//     }
-// }

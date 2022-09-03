@@ -75,15 +75,15 @@ impl TryFrom<OwnedNowPlayingResponse> for NowPlayingResult {
 
 pub(super) async fn run(cmd: ClientCommand) -> Result {
     let conn = ConnectionBuilder::session()
-        .context("failed to create session connection builder")?
+        .context("Failed to create session connection builder")?
         .build()
         .await
-        .context("failed to connect to D-Bus")?;
+        .context("Failed to connect to D-Bus")?;
 
     // TODO: declare timeout
     let proxy = Proxy::new(&conn, &*SERVER_NAME, &*SERVER_PATH, &*INTERFACE_NAME)
         .await
-        .context("failed to create server proxy")?;
+        .context("Failed to create server proxy")?;
 
     let id = cmd.id();
 
@@ -154,7 +154,7 @@ async fn try_send<R: Type + DeserializeOwned + 'static, A: DynamicType + Seriali
     loop {
         match proxy.call(&*method, args).await {
             Err(e) if i < MAX_TRIES => warn!("Request failed: {}", e),
-            r => break r.context("failed to contact empress server"),
+            r => break r.context("Failed to contact empress server"),
         }
 
         i += 1;

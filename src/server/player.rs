@@ -49,7 +49,7 @@ impl Player {
         // TODO: declare timeout
         let proxy = Proxy::new(conn, &self.bus, &*mpris::ENTRY_PATH, interface)
             .await
-            .context("failed to create player proxy")?;
+            .context("Failed to create player proxy")?;
 
         let args_dbg = if log_enabled!(Level::Trace) {
             Some(format!("{:?}", args))
@@ -59,14 +59,14 @@ impl Player {
 
         let res = proxy.call(method, args).await.with_context(|| {
             format!(
-                "calling {}::{} on player {} failed",
+                "Calling {}::{} on player {} failed",
                 interface, method, self.bus
             )
         });
 
         if let Some(args_dbg) = args_dbg {
             trace!(
-                "call {}::{} on {} with {} returned {:?}",
+                "Call {}::{} on {} with {} returned {:?}",
                 interface,
                 method,
                 self.bus,
@@ -90,17 +90,17 @@ impl Player {
         // TODO: declare timeout
         let proxy = Proxy::new(conn, &self.bus, &*mpris::ENTRY_PATH, interface)
             .await
-            .context("failed to create player proxy")?;
+            .context("Failed to create player proxy")?;
 
         let res = proxy.get_property(prop).await.with_context(|| {
             format!(
-                "getting {}::{} on player {} failed",
+                "Getting {}::{} on player {} failed",
                 interface, prop, self.bus
             )
         });
 
         trace!(
-            "get {}::{} on {} returned {:?}",
+            "Get {}::{} on {} returned {:?}",
             interface,
             prop,
             self.bus,
@@ -125,7 +125,7 @@ impl Player {
             &*mpris::player::INTERFACE,
         )
         .await
-        .context("failed to create player proxy")?;
+        .context("Failed to create player proxy")?;
 
         let value_dbg = if log_enabled!(Level::Trace) {
             Some(format!("{:?}", value))
@@ -135,14 +135,14 @@ impl Player {
 
         let res = proxy.set_property(prop, value).await.with_context(|| {
             format!(
-                "setting {}::{} on player {} failed",
+                "Setting {}::{} on player {} failed",
                 interface, prop, self.bus
             )
         });
 
         if let Some(value_dbg) = value_dbg {
             trace!(
-                "set {}::{} on {} to {} returned {:?}",
+                "Set {}::{} on {} to {} returned {:?}",
                 interface,
                 prop,
                 self.bus,
@@ -382,10 +382,10 @@ impl Player {
                 self.set_position(
                     conn,
                     meta.get(mpris::track_list::ATTR_TRACKID)
-                        .ok_or_else(|| anyhow!("missing track ID in metadata"))?
+                        .ok_or_else(|| anyhow!("Missing track ID in metadata"))?
                         .downcast_ref::<ObjectPath>()
                         .map(ObjectPath::as_ref)
-                        .ok_or_else(|| anyhow!("track ID wasn't a valid path"))?,
+                        .ok_or_else(|| anyhow!("Track ID wasn't a valid path"))?,
                     pos,
                 )
                 .await?,
