@@ -6,20 +6,13 @@ use std::{
 };
 
 use anyhow::{anyhow, Context};
-use dbus::{
-    arg::{ArgType, RefArg, Variant},
-    message::MatchRule,
-    nonblock::{
-        stdintf::org_freedesktop_dbus::PropertiesPropertiesChanged, MsgMatch, Proxy, SyncConnection,
-    },
-    strings::{BusName, Path},
-};
 use futures::prelude::*;
 use log::{debug, trace, warn};
 use tokio::{
     select,
     sync::{mpsc, RwLock},
 };
+use zbus::{zvariant::Value, Connection, Proxy};
 
 use super::{
     method_err, mpris, mpris::player::PlaybackStatus, MethodResult, NowPlayingResponse, Player,
@@ -28,42 +21,42 @@ use super::{
 use crate::{MethodId, Offset, PlayerOpts, Result};
 
 pub(super) struct Server {
-    conn: Arc<SyncConnection>,
+    conn: Arc<Connection>,
     players: RwLock<PlayerMap>,
-    prop_changed: MsgMatch,
+    // prop_changed: MsgMatch,
 }
 
 impl Server {
-    pub async fn new(conn: Arc<SyncConnection>) -> Result<Arc<Server>> {
+    pub async fn new(conn: Arc<Connection>) -> Result<Arc<Server>> {
         let players = RwLock::new(PlayerMap::new());
 
-        let mut mr = MatchRule::new_signal("org.freedesktop.DBus.Properties", "PropertiesChanged");
-        mr.path = Some(mpris::ENTRY_PATH.clone());
-        mr.path_is_namespace = false;
+        // let mut mr = MatchRule::new_signal("org.freedesktop.DBus.Properties", "PropertiesChanged");
+        // mr.path = Some(mpris::ENTRY_PATH.clone());
+        // mr.path_is_namespace = false;
 
         let (scan_tx, mut scan_rx) = mpsc::channel(1);
-        let prop_changed = conn
-            .add_match(mr)
-            .await
-            .context("failed to listen for property changes")?
-            .cb(move |_, changed: PropertiesPropertiesChanged| {
-                if changed.interface_name.as_str() != &**mpris::player::INTERFACE {
-                    debug!(
-                        "Ignoring PropertiesChanged for interface {:?}",
-                        changed.interface_name
-                    );
+        // let prop_changed = conn
+        //     .add_match(mr)
+        //     .await
+        //     .context("failed to listen for property changes")?
+        //     .cb(move |_, changed: PropertiesPropertiesChanged| {
+        //         if changed.interface_name.as_str() != &**mpris::player::INTERFACE {
+        //             debug!(
+        //                 "Ignoring PropertiesChanged for interface {:?}",
+        //                 changed.interface_name
+        //             );
 
-                    return true;
-                }
+        //             return true;
+        //         }
 
-                scan_tx.try_send(()).ok();
-                true
-            });
+        //         scan_tx.try_send(()).ok();
+        //         true
+        //     });
 
         let ret = Arc::new(Self {
             conn,
             players,
-            prop_changed,
+            // prop_changed,
         });
 
         let self_1 = ret.clone();
@@ -102,15 +95,17 @@ impl Server {
         }
 
         let proxy = Proxy::new(
+            &self.conn,
             "org.freedesktop.DBus",
             "/org/freedesktop/DBus",
-            Duration::from_secs(2),
-            self.conn.clone(),
-        );
+            "org.freedesktop.DBus",
+        )
+        .await
+        .context("failed to create root D-Bus proxy")?;
 
         let now = Instant::now();
         let (names,): (Vec<String>,) = proxy
-            .method_call("org.freedesktop.DBus", "ListNames", ())
+            .call("ListNames", &())
             .await
             .context("failed to call ListNames")?;
 
@@ -119,10 +114,11 @@ impl Server {
             force,
             names
                 .into_iter()
-                .filter(|n| n.starts_with(&**mpris::BUS_NAME))
-                .map(Into::into)
-                .collect(),
-            |n| Player::new(now, n.clone(), &*self.conn),
+                .filter(|n| n.starts_with(mpris::BUS_NAME.as_str()))
+                .map(TryInto::try_into)
+                .collect::<Result<_, _>>()
+                .context("failed to parse player list")?,
+            |n| Player::new(now, n.clone(), &self.conn),
         )
         .await;
 
@@ -201,7 +197,7 @@ impl Server {
         T,
         F: FnOnce() -> FR,
         FR: Future<Output = Result<T>>,
-        E: std::fmt::Display,
+        E: std::fmt::Display + Sync,
     >(
         &self,
         id: MethodId,
@@ -226,7 +222,7 @@ impl Server {
                     .iter_all()
                     .filter_map(|p| {
                         p.bus
-                            .strip_prefix(&**mpris::BUS_NAME)
+                            .strip_prefix(mpris::BUS_NAME.as_str())
                             .and_then(|s| s.strip_prefix('.'))
                             .map(|s| (s.into(), p.status.to_string()))
                     })
@@ -242,50 +238,35 @@ impl Server {
             MethodId::NowPlaying,
             || {
                 self.peek_player_with(|p| async move {
-                    let meta = p.metadata(&*self.conn).await?;
+                    let meta = p.metadata(&self.conn).await?;
 
-                    let has_track =
-                        meta.get(mpris::track_list::ATTR_TRACKID)
-                            .map_or(false, |Variant(v)| {
-                                !(v.arg_type() == ArgType::ObjectPath
-                                    && v.as_str()
-                                        .and_then(|s| {
-                                            Path::new(s)
-                                                .map_err(|e| {
-                                                    warn!("Failed to parse MPRIS trackid: {:?}", e);
-                                                })
-                                                .ok()
-                                        })
-                                        .map_or(false, |p| p == *mpris::track_list::NO_TRACK))
-                            });
+                    let has_track = meta
+                        .get(mpris::track_list::ATTR_TRACKID)
+                        .map_or(false, |v| match v {
+                            Value::ObjectPath(p) => *p != mpris::track_list::NO_TRACK.as_ref(),
+                            _ => false,
+                        });
 
                     let bus = p
                         .bus
-                        .strip_prefix(&**mpris::BUS_NAME)
+                        .strip_prefix(mpris::BUS_NAME.as_str())
                         .and_then(|s| s.strip_prefix('.'))
                         .map_or_else(String::new, Into::into);
-                    let ident = p.identity(&*self.conn).await?;
+                    let ident = p.identity(&self.conn).await?;
 
                     // Properties that should go into the map regardless of if we have a track
-                    let extra_props: [(String, Variant<Box<dyn RefArg>>); 2] = [
-                        (crate::metadata::PLAYER_BUS.into(), Variant(Box::new(bus))),
-                        (
-                            crate::metadata::PLAYER_IDENTITY.into(),
-                            Variant(Box::new(ident)),
-                        ),
+                    let extra_props: [(String, Value); 2] = [
+                        (crate::metadata::PLAYER_BUS.into(), bus.into()),
+                        (crate::metadata::PLAYER_IDENTITY.into(), ident.into()),
                     ];
 
                     Ok(Some(if has_track {
-                        let mut meta: HashMap<_, _> = meta
-                            .into_iter()
-                            .map(|(k, Variant(v))| (k, Variant(v.box_clone())))
-                            .chain(extra_props)
-                            .collect();
+                        let mut meta: HashMap<_, _> = meta.into_iter().chain(extra_props).collect();
 
-                        let pos = p.position(&*self.conn).await.ok();
+                        let pos = p.position(&self.conn).await.ok();
 
                         if let Some(pos) = pos {
-                            meta.insert(crate::metadata::POSITION.into(), Variant(Box::new(pos)));
+                            meta.insert(crate::metadata::POSITION.into(), pos.into());
                         }
 
                         (meta, p.status)
@@ -309,7 +290,7 @@ impl Server {
         self.handle_method(
             MethodId::Next,
             || {
-                self.process_player(|p| p.try_next(&*self.conn))
+                self.process_player(|p| p.try_next(&self.conn))
                     .map_ok(|_| ())
             },
             "failed to skip forward on a player",
@@ -321,7 +302,7 @@ impl Server {
         self.handle_method(
             MethodId::Previous,
             || {
-                self.process_player(|p| p.try_previous(&*self.conn))
+                self.process_player(|p| p.try_previous(&self.conn))
                     .map_ok(|_| ())
             },
             "failed to skip backward on a player",
@@ -333,7 +314,7 @@ impl Server {
         self.handle_method(
             MethodId::Pause,
             || {
-                self.process_player(|p| p.try_pause(&*self.conn))
+                self.process_player(|p| p.try_pause(&self.conn))
                     .map_ok(|_| ())
             },
             "failed to pause a player",
@@ -345,7 +326,7 @@ impl Server {
         self.handle_method(
             MethodId::PlayPause,
             || {
-                self.process_player(|p| p.try_play_pause(&*self.conn))
+                self.process_player(|p| p.try_play_pause(&self.conn))
                     .map_ok(|_| ())
             },
             "failed to play or pause a player",
@@ -357,7 +338,7 @@ impl Server {
         self.handle_method(
             MethodId::Stop,
             || {
-                self.process_player(|p| p.try_stop(&*self.conn))
+                self.process_player(|p| p.try_stop(&self.conn))
                     .map_ok(|_| ())
             },
             "failed to stop a player",
@@ -369,7 +350,7 @@ impl Server {
         self.handle_method(
             MethodId::Stop,
             || {
-                self.process_player(|p| p.try_play(&*self.conn))
+                self.process_player(|p| p.try_play(&self.conn))
                     .map_ok(|_| ())
             },
             "failed to play a player",
@@ -381,7 +362,7 @@ impl Server {
         self.handle_method(
             MethodId::SeekRelative,
             || {
-                self.process_player_with(|p| p.try_seek(&*self.conn, Offset::Relative(to)))
+                self.process_player_with(|p| p.try_seek(&self.conn, Offset::Relative(to)))
                     .map(|p| {
                         p?.ok_or_else(|| anyhow!("no players available to seek"))
                             .map(|p| (p,))
@@ -396,7 +377,7 @@ impl Server {
         self.handle_method(
             MethodId::SeekAbsolute,
             || {
-                self.process_player_with(|p| p.try_seek(&*self.conn, Offset::Absolute(to)))
+                self.process_player_with(|p| p.try_seek(&self.conn, Offset::Absolute(to)))
                     .map(|p| {
                         p?.ok_or_else(|| anyhow!("no players available to seek"))
                             .map(|p| (p,))
@@ -411,7 +392,7 @@ impl Server {
         self.handle_method(
             MethodId::VolRelative,
             || {
-                self.process_player_with(|p| p.try_set_volume(&*self.conn, Offset::Relative(to)))
+                self.process_player_with(|p| p.try_set_volume(&self.conn, Offset::Relative(to)))
                     .map(|p| {
                         p?.ok_or_else(|| anyhow!("no players available to get/adjust volume"))
                             .map(|p| (p,))
@@ -426,7 +407,7 @@ impl Server {
         self.handle_method(
             MethodId::VolAbsolute,
             || {
-                self.process_player_with(|p| p.try_set_volume(&*self.conn, Offset::Absolute(to)))
+                self.process_player_with(|p| p.try_set_volume(&self.conn, Offset::Absolute(to)))
                     .map(|p| {
                         p?.ok_or_else(|| anyhow!("no players available to set volume"))
                             .map(|p| (p,))
@@ -445,7 +426,8 @@ impl Server {
         self.handle_method(
             MethodId::SwitchCurrent,
             || async {
-                let bus = BusName::new(format!("{}.{}", *mpris::BUS_NAME, to))
+                let bus = format!("{}.{}", *mpris::BUS_NAME, to)
+                    .try_into()
                     .map_err(|s| anyhow!("{:?} is not a valid bus name", s))?;
 
                 let curr = match self.players.write().await.remove(&bus) {
@@ -455,7 +437,7 @@ impl Server {
 
                 let mut curr = if switch_playing {
                     let mut put = vec![];
-                    let conn = &*self.conn;
+                    let conn = &self.conn;
 
                     for player in self.players.read().await.iter_all() {
                         if player.playback_status(conn).await? == PlaybackStatus::Playing
@@ -493,12 +475,12 @@ impl Server {
     }
 }
 
-impl Drop for Server {
-    fn drop(&mut self) {
-        tokio::runtime::Builder::new_current_thread()
-            .build()
-            .unwrap()
-            .block_on(self.conn.remove_match(self.prop_changed.token()))
-            .expect("removing PropertiesChanged listener failed");
-    }
-}
+// impl Drop for Server {
+//     fn drop(&mut self) {
+//         tokio::runtime::Builder::new_current_thread()
+//             .build()
+//             .unwrap()
+//             .block_on(self.conn.remove_match(self.prop_changed.token()))
+//             .expect("removing PropertiesChanged listener failed");
+//     }
+// }

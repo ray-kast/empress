@@ -1,18 +1,17 @@
-use std::{io, sync::Arc, time::Duration};
+use std::{io, time::Duration};
 
 use anyhow::{Context, Error};
-use dbus::{
-    arg::{AppendAll, ReadAll, RefArg, Variant},
-    nonblock::{Proxy, SyncConnection},
-};
-use dbus_tokio::connection;
 use log::{info, trace, warn};
-use serde::Serialize;
-use tokio::{select, sync::oneshot, task};
+use serde::{de::DeserializeOwned, Serialize};
+use tokio::select;
+use zbus::{
+    zvariant::{DynamicType, Type},
+    ConnectionBuilder, Proxy,
+};
 
 use crate::{
     format,
-    server::{mpris, mpris::player::PlaybackStatus, NowPlayingResponse},
+    server::{mpris, mpris::player::PlaybackStatus, OwnedNowPlayingResponse},
     ClientCommand, MethodId, PlayerOpts, Result, INTERFACE_NAME, SERVER_NAME, SERVER_PATH,
 };
 
@@ -35,36 +34,31 @@ struct NowPlayingResult {
     position: Option<i64>,
 }
 
-impl TryFrom<NowPlayingResponse> for NowPlayingResult {
+impl TryFrom<OwnedNowPlayingResponse> for NowPlayingResult {
     type Error = Error;
 
-    fn try_from((mut map, status): NowPlayingResponse) -> Result<Self> {
+    fn try_from((mut map, status): OwnedNowPlayingResponse) -> Result<Self> {
         let bus = map
             .remove(crate::metadata::PLAYER_BUS)
-            .and_then(|Variant(v)| v.as_str().map(ToOwned::to_owned));
+            .and_then(|v| v.try_into().ok());
         let id = map
             .remove(crate::metadata::PLAYER_IDENTITY)
-            .and_then(|Variant(v)| v.as_str().map(ToOwned::to_owned));
+            .and_then(|v| v.try_into().ok());
         let title = map
             .remove(mpris::track_list::ATTR_TITLE)
-            .and_then(|Variant(v)| v.as_str().map(ToOwned::to_owned));
+            .and_then(|v| v.try_into().ok());
         let artist = map
             .remove(mpris::track_list::ATTR_ARTIST)
-            .and_then(|Variant(v)| {
-                v.as_iter().map(|i| {
-                    i.filter_map(|v| v.as_str().map(ToOwned::to_owned))
-                        .collect::<Vec<_>>()
-                })
-            });
+            .and_then(|v| v.try_into().ok());
         let album = map
             .remove(mpris::track_list::ATTR_ALBUM)
-            .and_then(|Variant(v)| v.as_str().map(ToOwned::to_owned));
+            .and_then(|v| v.try_into().ok());
         let length = map
             .remove(mpris::track_list::ATTR_LENGTH)
-            .and_then(|Variant(v)| v.as_i64());
+            .and_then(|v| v.try_into().ok());
         let position = map
             .remove(crate::metadata::POSITION)
-            .and_then(|Variant(v)| v.as_i64());
+            .and_then(|v| v.try_into().ok());
 
         let _: PlaybackStatus = status.parse()?;
 
@@ -81,17 +75,24 @@ impl TryFrom<NowPlayingResponse> for NowPlayingResult {
 }
 
 pub(super) async fn run(cmd: ClientCommand) -> Result {
-    let (res, conn) = connection::new_session_sync().context("failed to connect to D-Bus")?;
-    let (close_tx, close_rx) = oneshot::channel();
+    let conn = ConnectionBuilder::session()
+        .context("failed to create session connection builder")?
+        .build()
+        .await
+        .context("failed to connect to D-Bus")?;
+    // let (close_tx, close_rx) = oneshot::channel();
 
-    task::spawn(async {
-        close_tx
-            .send(Error::from(res.await).context("D-Bus disconnected"))
-            .ok();
-    });
+    // task::spawn(async {
+    //     close_tx
+    //         .send(Error::from(res.await).context("D-Bus disconnected"))
+    //         .ok();
+    // });
 
     let run = async move {
-        let proxy = Proxy::new(&*SERVER_NAME, &*SERVER_PATH, Duration::from_secs(2), conn);
+        // TODO: declare timeout
+        let proxy = Proxy::new(&conn, &*SERVER_NAME, &*SERVER_PATH, &*INTERFACE_NAME)
+            .await
+            .context("failed to create server proxy")?;
 
         let id = cmd.id();
 
@@ -103,10 +104,10 @@ pub(super) async fn run(cmd: ClientCommand) -> Result {
             | ClientCommand::Stop(opts)
             | ClientCommand::Play(opts) => {
                 let PlayerOpts {} = opts;
-                try_send(&proxy, id, ()).await?;
+                try_send(&proxy, id, &()).await?;
             },
             ClientCommand::ListPlayers => {
-                let (players,): (Vec<(String, String)>,) = try_send(&proxy, id, ()).await?;
+                let (players,): (Vec<(String, String)>,) = try_send(&proxy, id, &()).await?;
 
                 for (player, status) in players {
                     println!("{}\t{}", player, status);
@@ -116,7 +117,7 @@ pub(super) async fn run(cmd: ClientCommand) -> Result {
                 player: PlayerOpts {},
                 format,
             } => {
-                let resp: NowPlayingResponse = try_send(&proxy, id, ()).await?;
+                let resp: OwnedNowPlayingResponse = try_send(&proxy, id, &()).await?;
 
                 trace!("Full now-playing response: {:?}", resp);
 
@@ -136,13 +137,13 @@ pub(super) async fn run(cmd: ClientCommand) -> Result {
                 player: PlayerOpts {},
                 to,
             } => {
-                try_send(&proxy, id, (to.offset(),)).await?;
+                try_send(&proxy, id, &(to.offset(),)).await?;
             },
             ClientCommand::Volume {
                 player: PlayerOpts {},
                 vol,
             } => {
-                let (vol,): (f64,) = try_send(&proxy, id, (vol.offset(),)).await?;
+                let (vol,): (f64,) = try_send(&proxy, id, &(vol.offset(),)).await?;
 
                 print!("{}", vol);
 
@@ -152,25 +153,26 @@ pub(super) async fn run(cmd: ClientCommand) -> Result {
             },
             ClientCommand::SwitchCurrent { to, no_play } => {
                 let switch_playing = !no_play;
-                try_send(&proxy, id, (to, switch_playing)).await?;
+                try_send(&proxy, id, &(to, switch_playing)).await?;
             },
         }
 
         Ok(())
     };
 
+    // TODO: this is redundant if the commented section is no longer necessary
     select!(
         res = run => res,
-        err = close_rx => Err(
-            err.context("lost D-Bus connection resource").map_or_else(|e| e, |e| e)
-        ),
+        // err = close_rx => Err(
+        //     err.context("lost D-Bus connection resource").map_or_else(|e| e, |e| e)
+        // ),
     )
 }
 
-async fn try_send<R: ReadAll + 'static, A: AppendAll + Clone>(
-    proxy: &Proxy<'_, Arc<SyncConnection>>,
+async fn try_send<R: Type + DeserializeOwned + 'static, A: DynamicType + Serialize + Clone>(
+    proxy: &Proxy<'_>,
     method: MethodId,
-    args: A,
+    args: &A,
 ) -> Result<R> {
     const MAX_TRIES: usize = 5;
 
@@ -178,10 +180,7 @@ async fn try_send<R: ReadAll + 'static, A: AppendAll + Clone>(
     let mut i = 0;
 
     loop {
-        match proxy
-            .method_call(&*INTERFACE_NAME, &method, args.clone())
-            .await
-        {
+        match proxy.call(&*method, args).await {
             Err(e) if i < MAX_TRIES => warn!("Request failed: {}", e),
             r => break r.context("failed to contact empress server"),
         }

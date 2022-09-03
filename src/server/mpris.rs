@@ -1,48 +1,49 @@
 #![allow(clippy::needless_borrow)] // Clippy bug
 
-use dbus::{
-    strings::{BusName, Interface, Member},
-    Path,
-};
 use lazy_static::lazy_static;
+use zbus::{
+    names::{OwnedBusName, OwnedInterfaceName, OwnedMemberName},
+    zvariant::OwnedObjectPath,
+};
 
 lazy_static! {
     pub static ref NAME_PREFIX: String = "org.mpris.MediaPlayer2".into();
     pub static ref PATH_PREFIX: String = "/org/mpris/MediaPlayer2".into();
-    pub static ref BUS_NAME: BusName<'static> = (&*NAME_PREFIX).into();
-    pub static ref ENTRY_PATH: Path<'static> = (&*PATH_PREFIX).into();
+    pub static ref BUS_NAME: OwnedBusName = NAME_PREFIX.as_str().try_into().unwrap();
+    pub static ref ENTRY_PATH: OwnedObjectPath = PATH_PREFIX.as_str().try_into().unwrap();
 }
 
 pub mod root {
-    use super::{lazy_static, Interface, Member, NAME_PREFIX};
+    use super::{lazy_static, OwnedInterfaceName, OwnedMemberName, NAME_PREFIX};
 
     lazy_static! {
-        pub static ref INTERFACE: Interface<'static> = NAME_PREFIX.clone().into();
-        pub static ref IDENTITY: Member<'static> = "Identity".into();
+        pub static ref INTERFACE: OwnedInterfaceName = NAME_PREFIX.clone().try_into().unwrap();
+        pub static ref IDENTITY: OwnedMemberName = "Identity".try_into().unwrap();
     }
 }
 
 pub mod player {
-    use super::{lazy_static, Interface, Member, NAME_PREFIX};
+    use super::{lazy_static, OwnedInterfaceName, OwnedMemberName, NAME_PREFIX};
 
     lazy_static! {
-        pub static ref INTERFACE: Interface<'static> = format!("{}.Player", *NAME_PREFIX).into();
-        pub static ref NEXT: Member<'static> = "Next".into();
-        pub static ref PREVIOUS: Member<'static> = "Previous".into();
-        pub static ref PAUSE: Member<'static> = "Pause".into();
-        pub static ref STOP: Member<'static> = "Stop".into();
-        pub static ref PLAY: Member<'static> = "Play".into();
-        pub static ref SET_POSITION: Member<'static> = "SetPosition".into();
-        pub static ref PLAYBACK_STATUS: Member<'static> = "PlaybackStatus".into();
-        pub static ref METADATA: Member<'static> = "Metadata".into();
-        pub static ref VOLUME: Member<'static> = "Volume".into();
-        pub static ref POSITION: Member<'static> = "Position".into();
-        pub static ref CAN_GO_NEXT: Member<'static> = "CanGoNext".into();
-        pub static ref CAN_GO_PREVIOUS: Member<'static> = "CanGoPrevious".into();
-        pub static ref CAN_PLAY: Member<'static> = "CanPlay".into();
-        pub static ref CAN_PAUSE: Member<'static> = "CanPause".into();
-        pub static ref CAN_SEEK: Member<'static> = "CanSeek".into();
-        pub static ref CAN_CONTROL: Member<'static> = "CanControl".into();
+        pub static ref INTERFACE: OwnedInterfaceName =
+            format!("{}.Player", *NAME_PREFIX).try_into().unwrap();
+        pub static ref NEXT: OwnedMemberName = "Next".try_into().unwrap();
+        pub static ref PREVIOUS: OwnedMemberName = "Previous".try_into().unwrap();
+        pub static ref PAUSE: OwnedMemberName = "Pause".try_into().unwrap();
+        pub static ref STOP: OwnedMemberName = "Stop".try_into().unwrap();
+        pub static ref PLAY: OwnedMemberName = "Play".try_into().unwrap();
+        pub static ref SET_POSITION: OwnedMemberName = "SetPosition".try_into().unwrap();
+        pub static ref PLAYBACK_STATUS: OwnedMemberName = "PlaybackStatus".try_into().unwrap();
+        pub static ref METADATA: OwnedMemberName = "Metadata".try_into().unwrap();
+        pub static ref VOLUME: OwnedMemberName = "Volume".try_into().unwrap();
+        pub static ref POSITION: OwnedMemberName = "Position".try_into().unwrap();
+        pub static ref CAN_GO_NEXT: OwnedMemberName = "CanGoNext".try_into().unwrap();
+        pub static ref CAN_GO_PREVIOUS: OwnedMemberName = "CanGoPrevious".try_into().unwrap();
+        pub static ref CAN_PLAY: OwnedMemberName = "CanPlay".try_into().unwrap();
+        pub static ref CAN_PAUSE: OwnedMemberName = "CanPause".try_into().unwrap();
+        pub static ref CAN_SEEK: OwnedMemberName = "CanSeek".try_into().unwrap();
+        pub static ref CAN_CONTROL: OwnedMemberName = "CanControl".try_into().unwrap();
     }
 
     #[derive(
@@ -56,7 +57,7 @@ pub mod player {
 }
 
 pub mod track_list {
-    use super::{lazy_static, Path};
+    use super::{lazy_static, OwnedObjectPath};
 
     pub const ATTR_TRACKID: &str = "mpris:trackid";
     pub const ATTR_LENGTH: &str = "mpris:length";
@@ -66,6 +67,7 @@ pub mod track_list {
 
     lazy_static! {
         pub static ref PATH_PREFIX: String = format!("{}/TrackList", *super::PATH_PREFIX);
-        pub static ref NO_TRACK: Path<'static> = format!("{}/NoTrack", *PATH_PREFIX).into();
+        pub static ref NO_TRACK: OwnedObjectPath =
+            format!("{}/NoTrack", *PATH_PREFIX).try_into().unwrap();
     }
 }

@@ -1,3 +1,4 @@
+#![allow(dead_code)] // TODO: remove before merging
 #![deny(
     clippy::suspicious,
     clippy::style,
@@ -21,6 +22,10 @@ use clap::Parser;
 use lazy_static::lazy_static;
 use log::{error, LevelFilter};
 use tokio::runtime::Builder as RtBuilder;
+use zbus::{
+    names::{OwnedInterfaceName, OwnedWellKnownName},
+    zvariant::OwnedObjectPath,
+};
 
 mod client;
 mod format;
@@ -42,9 +47,11 @@ lazy_static! {
 
 lazy_static! {
     static ref API_IDENT: String = format!("Empress{}", env!("CARGO_PKG_VERSION_MAJOR"));
-    static ref INTERFACE_NAME: String = format!("{}.Daemon", *NAME_PREFIX);
-    static ref SERVER_NAME: String = NAME_PREFIX.clone();
-    static ref SERVER_PATH: String = format!("{}/Daemon", *PATH_PREFIX);
+    static ref INTERFACE_NAME: OwnedInterfaceName =
+        format!("{}.Daemon", *NAME_PREFIX).try_into().unwrap();
+    static ref SERVER_NAME: OwnedWellKnownName = NAME_PREFIX.as_str().try_into().unwrap();
+    static ref SERVER_PATH: OwnedObjectPath =
+        format!("{}/Daemon", *PATH_PREFIX).try_into().unwrap();
 }
 
 pub(crate) mod metadata {

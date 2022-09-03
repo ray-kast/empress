@@ -4,28 +4,25 @@ use std::{
     time::Instant,
 };
 
-use dbus::strings::BusName;
 use futures::{stream::FuturesUnordered, StreamExt};
 use log::{debug, trace, warn};
 use tokio::sync::RwLock;
+use zbus::names::OwnedBusName;
 
 use super::{mpris::player::PlaybackStatus, Player};
 use crate::Result;
 
 #[derive(Debug)]
 pub(super) struct PlayerMap(
-    HashMap<BusName<'static>, (PlaybackStatus, Instant)>,
+    HashMap<OwnedBusName, (PlaybackStatus, Instant)>,
     BTreeSet<Player>,
 );
 
 impl PlayerMap {
-    pub async fn inform<
-        P: Fn(&BusName<'static>) -> PR + Copy,
-        PR: Future<Output = Result<Player>>,
-    >(
+    pub async fn inform<P: Fn(&OwnedBusName) -> PR + Copy, PR: Future<Output = Result<Player>>>(
         this: &RwLock<Self>,
         try_patch: bool,
-        names: HashSet<BusName<'static>>,
+        names: HashSet<OwnedBusName>,
         player: P,
     ) {
         use std::collections::hash_map::Entry;
@@ -147,7 +144,7 @@ impl PlayerMap {
         }
     }
 
-    pub fn remove(&mut self, bus: &BusName<'static>) -> Option<Player> {
+    pub fn remove(&mut self, bus: &OwnedBusName) -> Option<Player> {
         if let Some((status, last_update)) = self.0.remove(bus) {
             trace!("Removing player from map: {:?}", bus);
 

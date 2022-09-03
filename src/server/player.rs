@@ -1,16 +1,13 @@
-use std::{
-    collections::HashMap,
-    fmt::Debug,
-    time::{Duration, Instant},
-};
+use std::{collections::HashMap, fmt::Debug, time::Instant};
 
 use anyhow::{anyhow, Context};
-use dbus::{
-    arg::{Append, AppendAll, Arg, Get, ReadAll, RefArg, Variant},
-    nonblock::{stdintf::org_freedesktop_dbus::Properties, Proxy, SyncConnection},
-    strings::{BusName, Interface, Member, Path},
-};
 use log::{log_enabled, trace, Level};
+use serde::{de::DeserializeOwned, Serialize};
+use zbus::{
+    names::{InterfaceName, MemberName, OwnedBusName},
+    zvariant::{DynamicType, ObjectPath, OwnedValue, Type, Value},
+    Connection, Proxy,
+};
 
 use super::{mpris, mpris::player::PlaybackStatus};
 use crate::{Offset, Result};
@@ -19,14 +16,14 @@ use crate::{Offset, Result};
 pub(super) struct Player {
     pub status: PlaybackStatus,
     pub last_update: Instant,
-    pub bus: BusName<'static>,
+    pub bus: OwnedBusName,
 }
 
 impl Player {
     pub async fn new(
         last_update: Instant,
-        name: impl Into<BusName<'static>>,
-        conn: &SyncConnection,
+        name: impl Into<OwnedBusName>,
+        conn: &Connection,
     ) -> Result<Self> {
         let mut ret = Self {
             status: PlaybackStatus::Stopped,
@@ -39,14 +36,20 @@ impl Player {
         Ok(ret)
     }
 
-    async fn call<A: Debug + AppendAll, T: Debug + ReadAll + 'static>(
+    async fn call<
+        A: DynamicType + Serialize + Debug,
+        T: Type + DeserializeOwned + Debug + 'static,
+    >(
         &self,
-        interface: &Interface<'_>,
-        method: &Member<'_>,
-        conn: &SyncConnection,
-        args: A,
+        interface: &InterfaceName<'_>,
+        method: &MemberName<'_>,
+        conn: &Connection,
+        args: &A,
     ) -> Result<T> {
-        let proxy = Proxy::new(&self.bus, &*mpris::ENTRY_PATH, Duration::from_secs(2), conn);
+        // TODO: declare timeout
+        let proxy = Proxy::new(conn, &self.bus, &*mpris::ENTRY_PATH, interface)
+            .await
+            .context("failed to create player proxy")?;
 
         let args_dbg = if log_enabled!(Level::Trace) {
             Some(format!("{:?}", args))
@@ -54,15 +57,12 @@ impl Player {
             None
         };
 
-        let res = proxy
-            .method_call(interface, method, args)
-            .await
-            .with_context(|| {
-                format!(
-                    "calling {}::{} on player {} failed",
-                    interface, method, self.bus
-                )
-            });
+        let res = proxy.call(method, args).await.with_context(|| {
+            format!(
+                "calling {}::{} on player {} failed",
+                interface, method, self.bus
+            )
+        });
 
         if let Some(args_dbg) = args_dbg {
             trace!(
@@ -78,15 +78,21 @@ impl Player {
         res
     }
 
-    async fn get<T: Debug + for<'b> Get<'b> + 'static>(
+    async fn get<T: TryFrom<OwnedValue> + Debug + 'static>(
         &self,
-        interface: &Interface<'_>,
-        prop: &Member<'_>,
-        conn: &SyncConnection,
-    ) -> Result<T> {
-        let proxy = Proxy::new(&self.bus, &*mpris::ENTRY_PATH, Duration::from_secs(2), conn);
+        interface: &InterfaceName<'_>,
+        prop: &MemberName<'_>,
+        conn: &Connection,
+    ) -> Result<T>
+    where
+        T::Error: Into<zbus::Error>,
+    {
+        // TODO: declare timeout
+        let proxy = Proxy::new(conn, &self.bus, &*mpris::ENTRY_PATH, interface)
+            .await
+            .context("failed to create player proxy")?;
 
-        let res = proxy.get(interface, prop).await.with_context(|| {
+        let res = proxy.get_property(prop).await.with_context(|| {
             format!(
                 "getting {}::{} on player {} failed",
                 interface, prop, self.bus
@@ -104,14 +110,22 @@ impl Player {
         res
     }
 
-    async fn set<T: Debug + Arg + Append>(
+    async fn set<T: for<'t> Into<Value<'t>> + Debug>(
         &self,
-        interface: &Interface<'_>,
-        prop: &Member<'_>,
-        conn: &SyncConnection,
+        interface: &InterfaceName<'_>,
+        prop: &MemberName<'_>,
+        conn: &Connection,
         value: T,
     ) -> Result<()> {
-        let proxy = Proxy::new(&self.bus, &*mpris::ENTRY_PATH, Duration::from_secs(2), conn);
+        // TODO: declare timeout
+        let proxy = Proxy::new(
+            conn,
+            &self.bus,
+            &*mpris::ENTRY_PATH,
+            &*mpris::player::INTERFACE,
+        )
+        .await
+        .context("failed to create player proxy")?;
 
         let value_dbg = if log_enabled!(Level::Trace) {
             Some(format!("{:?}", value))
@@ -119,15 +133,12 @@ impl Player {
             None
         };
 
-        let res = proxy
-            .set(&*mpris::player::INTERFACE, prop, value)
-            .await
-            .with_context(|| {
-                format!(
-                    "setting {}::{} on player {} failed",
-                    interface, prop, self.bus
-                )
-            });
+        let res = proxy.set_property(prop, value).await.with_context(|| {
+            format!(
+                "setting {}::{} on player {} failed",
+                interface, prop, self.bus
+            )
+        });
 
         if let Some(value_dbg) = value_dbg {
             trace!(
@@ -145,8 +156,8 @@ impl Player {
 
     //////// Methods under MediaPlayer2.Player ////////
 
-    pub async fn next(self, conn: &SyncConnection) -> Result<Self> {
-        self.call(&*mpris::player::INTERFACE, &*mpris::player::NEXT, conn, ())
+    pub async fn next(self, conn: &Connection) -> Result<Self> {
+        self.call(&mpris::player::INTERFACE, &mpris::player::NEXT, conn, &())
             .await?;
 
         Ok(Self {
@@ -155,12 +166,12 @@ impl Player {
         })
     }
 
-    pub async fn previous(self, conn: &SyncConnection) -> Result<Self> {
+    pub async fn previous(self, conn: &Connection) -> Result<Self> {
         self.call(
-            &*mpris::player::INTERFACE,
-            &*mpris::player::PREVIOUS,
+            &mpris::player::INTERFACE,
+            &mpris::player::PREVIOUS,
             conn,
-            (),
+            &(),
         )
         .await?;
 
@@ -170,9 +181,14 @@ impl Player {
         })
     }
 
-    pub async fn pause(self, conn: &SyncConnection) -> Result<Self> {
-        self.call(&*mpris::player::INTERFACE, &*mpris::player::PAUSE, conn, ())
-            .await?;
+    pub async fn pause(self, conn: &Connection) -> Result<Self> {
+        self.call(
+            &mpris::player::INTERFACE,
+            &mpris::player::PAUSE,
+            conn,
+            &(),
+        )
+        .await?;
 
         Ok(Self {
             status: PlaybackStatus::Paused,
@@ -181,8 +197,8 @@ impl Player {
         })
     }
 
-    pub async fn stop(self, conn: &SyncConnection) -> Result<Self> {
-        self.call(&*mpris::player::INTERFACE, &*mpris::player::STOP, conn, ())
+    pub async fn stop(self, conn: &Connection) -> Result<Self> {
+        self.call(&mpris::player::INTERFACE, &mpris::player::STOP, conn, &())
             .await?;
 
         Ok(Self {
@@ -192,8 +208,8 @@ impl Player {
         })
     }
 
-    pub async fn play(self, conn: &SyncConnection) -> Result<Self> {
-        self.call(&*mpris::player::INTERFACE, &*mpris::player::PLAY, conn, ())
+    pub async fn play(self, conn: &Connection) -> Result<Self> {
+        self.call(&mpris::player::INTERFACE, &mpris::player::PLAY, conn, &())
             .await?;
 
         Ok(Self {
@@ -206,15 +222,15 @@ impl Player {
     #[allow(clippy::cast_possible_truncation)]
     pub async fn set_position(
         self,
-        conn: &SyncConnection,
-        id: Path<'_>,
+        conn: &Connection,
+        id: ObjectPath<'_>,
         secs: i64,
     ) -> Result<Self> {
         self.call(
-            &*mpris::player::INTERFACE,
-            &*mpris::player::SET_POSITION,
+            &mpris::player::INTERFACE,
+            &mpris::player::SET_POSITION,
             conn,
-            (id, secs),
+            &(id, secs),
         )
         .await?;
 
@@ -226,40 +242,37 @@ impl Player {
 
     //////// Properties under MediaPlayer2 ////////
 
-    pub async fn identity(&self, conn: &SyncConnection) -> Result<String> {
-        self.get(&*mpris::root::INTERFACE, &*mpris::root::IDENTITY, conn)
+    pub async fn identity(&self, conn: &Connection) -> Result<String> {
+        self.get(&mpris::root::INTERFACE, &mpris::root::IDENTITY, conn)
             .await
     }
 
     //////// Properties under MediaPlayer2.Player ////////
 
-    pub async fn playback_status(&self, conn: &SyncConnection) -> Result<PlaybackStatus> {
+    pub async fn playback_status(&self, conn: &Connection) -> Result<PlaybackStatus> {
         self.get(
-            &*mpris::player::INTERFACE,
-            &*mpris::player::PLAYBACK_STATUS,
+            &mpris::player::INTERFACE,
+            &mpris::player::PLAYBACK_STATUS,
             conn,
         )
         .await
         .and_then(|s: String| s.parse().context("Invalid playback status"))
     }
 
-    pub async fn metadata(
-        &self,
-        conn: &SyncConnection,
-    ) -> Result<HashMap<String, Variant<Box<dyn RefArg>>>> {
-        self.get(&*mpris::player::INTERFACE, &*mpris::player::METADATA, conn)
+    pub async fn metadata(&self, conn: &Connection) -> Result<HashMap<String, Value<'static>>> {
+        self.get(&mpris::player::INTERFACE, &mpris::player::METADATA, conn)
             .await
     }
 
-    pub async fn volume(&self, conn: &SyncConnection) -> Result<f64> {
-        self.get(&*mpris::player::INTERFACE, &*mpris::player::VOLUME, conn)
+    pub async fn volume(&self, conn: &Connection) -> Result<f64> {
+        self.get(&mpris::player::INTERFACE, &mpris::player::VOLUME, conn)
             .await
     }
 
-    pub async fn set_volume(&self, conn: &SyncConnection, vol: f64) -> Result<()> {
+    pub async fn set_volume(&self, conn: &Connection, vol: f64) -> Result<()> {
         self.set(
-            &*mpris::player::INTERFACE,
-            &*mpris::player::VOLUME,
+            &mpris::player::INTERFACE,
+            &mpris::player::VOLUME,
             conn,
             vol,
         )
@@ -267,48 +280,48 @@ impl Player {
     }
 
     #[allow(clippy::cast_precision_loss)]
-    pub async fn position(&self, conn: &SyncConnection) -> Result<i64> {
-        self.get(&*mpris::player::INTERFACE, &*mpris::player::POSITION, conn)
+    pub async fn position(&self, conn: &Connection) -> Result<i64> {
+        self.get(&mpris::player::INTERFACE, &mpris::player::POSITION, conn)
             .await
     }
 
-    pub async fn can_go_next(&self, conn: &SyncConnection) -> Result<bool> {
+    pub async fn can_go_next(&self, conn: &Connection) -> Result<bool> {
         self.get(
-            &*mpris::player::INTERFACE,
-            &*mpris::player::CAN_GO_NEXT,
+            &mpris::player::INTERFACE,
+            &mpris::player::CAN_GO_NEXT,
             conn,
         )
         .await
     }
 
-    pub async fn can_go_previous(&self, conn: &SyncConnection) -> Result<bool> {
+    pub async fn can_go_previous(&self, conn: &Connection) -> Result<bool> {
         self.get(
-            &*mpris::player::INTERFACE,
-            &*mpris::player::CAN_GO_PREVIOUS,
+            &mpris::player::INTERFACE,
+            &mpris::player::CAN_GO_PREVIOUS,
             conn,
         )
         .await
     }
 
-    pub async fn can_play(&self, conn: &SyncConnection) -> Result<bool> {
-        self.get(&*mpris::player::INTERFACE, &*mpris::player::CAN_PLAY, conn)
+    pub async fn can_play(&self, conn: &Connection) -> Result<bool> {
+        self.get(&mpris::player::INTERFACE, &mpris::player::CAN_PLAY, conn)
             .await
     }
 
-    pub async fn can_pause(&self, conn: &SyncConnection) -> Result<bool> {
-        self.get(&*mpris::player::INTERFACE, &*mpris::player::CAN_PAUSE, conn)
+    pub async fn can_pause(&self, conn: &Connection) -> Result<bool> {
+        self.get(&mpris::player::INTERFACE, &mpris::player::CAN_PAUSE, conn)
             .await
     }
 
-    pub async fn can_seek(&self, conn: &SyncConnection) -> Result<bool> {
-        self.get(&*mpris::player::INTERFACE, &*mpris::player::CAN_SEEK, conn)
+    pub async fn can_seek(&self, conn: &Connection) -> Result<bool> {
+        self.get(&mpris::player::INTERFACE, &mpris::player::CAN_SEEK, conn)
             .await
     }
 
-    pub async fn can_control(&self, conn: &SyncConnection) -> Result<bool> {
+    pub async fn can_control(&self, conn: &Connection) -> Result<bool> {
         self.get(
-            &*mpris::player::INTERFACE,
-            &*mpris::player::CAN_CONTROL,
+            &mpris::player::INTERFACE,
+            &mpris::player::CAN_CONTROL,
             conn,
         )
         .await
@@ -316,7 +329,7 @@ impl Player {
 
     //////// Empress-specific wrapper methods ////////
 
-    pub async fn try_next(self, conn: &SyncConnection) -> Result<Option<Self>> {
+    pub async fn try_next(self, conn: &Connection) -> Result<Option<Self>> {
         Ok(if self.can_go_next(conn).await? {
             Some(self.next(conn).await?)
         } else {
@@ -324,7 +337,7 @@ impl Player {
         })
     }
 
-    pub async fn try_previous(self, conn: &SyncConnection) -> Result<Option<Self>> {
+    pub async fn try_previous(self, conn: &Connection) -> Result<Option<Self>> {
         Ok(if self.can_go_previous(conn).await? {
             Some(self.previous(conn).await?)
         } else {
@@ -332,7 +345,7 @@ impl Player {
         })
     }
 
-    pub async fn try_pause(self, conn: &SyncConnection) -> Result<Option<Self>> {
+    pub async fn try_pause(self, conn: &Connection) -> Result<Option<Self>> {
         Ok(
             if self.playback_status(conn).await? == PlaybackStatus::Playing
                 && self.can_pause(conn).await?
@@ -344,7 +357,7 @@ impl Player {
         )
     }
 
-    pub async fn try_play_pause(self, conn: &SyncConnection) -> Result<Option<Self>> {
+    pub async fn try_play_pause(self, conn: &Connection) -> Result<Option<Self>> {
         Ok(match self.playback_status(conn).await? {
             PlaybackStatus::Playing if self.can_pause(conn).await? => Some(self.pause(conn).await?),
             PlaybackStatus::Paused if self.can_play(conn).await? => Some(self.play(conn).await?),
@@ -352,7 +365,7 @@ impl Player {
         })
     }
 
-    pub async fn try_stop(self, conn: &SyncConnection) -> Result<Option<Self>> {
+    pub async fn try_stop(self, conn: &Connection) -> Result<Option<Self>> {
         Ok(match self.playback_status(conn).await? {
             PlaybackStatus::Playing | PlaybackStatus::Paused if self.can_control(conn).await? => {
                 Some(self.stop(conn).await?)
@@ -361,7 +374,7 @@ impl Player {
         })
     }
 
-    pub async fn try_play(self, conn: &SyncConnection) -> Result<Option<Self>> {
+    pub async fn try_play(self, conn: &Connection) -> Result<Option<Self>> {
         Ok(
             if self.playback_status(conn).await? != PlaybackStatus::Playing
                 && self.can_play(conn).await?
@@ -374,7 +387,7 @@ impl Player {
     }
 
     #[allow(clippy::cast_precision_loss, clippy::cast_possible_truncation)]
-    pub async fn try_seek(self, conn: &SyncConnection, to: Offset) -> Result<Option<(Self, f64)>> {
+    pub async fn try_seek(self, conn: &Connection, to: Offset) -> Result<Option<(Self, f64)>> {
         Ok(if self.can_seek(conn).await? {
             let meta = self.metadata(conn).await?;
 
@@ -386,13 +399,11 @@ impl Player {
             Some((
                 self.set_position(
                     conn,
-                    Path::new(
-                        meta.get(mpris::track_list::ATTR_TRACKID)
-                            .ok_or_else(|| anyhow!("missing track ID in metadata"))?
-                            .as_str()
-                            .ok_or_else(|| anyhow!("track ID wasn't a string"))?,
-                    )
-                    .map_err(|s| anyhow!("track ID {:?} was not valid", s))?,
+                    meta.get(mpris::track_list::ATTR_TRACKID)
+                        .ok_or_else(|| anyhow!("missing track ID in metadata"))?
+                        .downcast_ref::<ObjectPath>()
+                        .map(ObjectPath::as_ref)
+                        .ok_or_else(|| anyhow!("track ID wasn't a valid path"))?,
                     pos,
                 )
                 .await?,
@@ -405,7 +416,7 @@ impl Player {
 
     pub async fn try_set_volume(
         self,
-        conn: &SyncConnection,
+        conn: &Connection,
         vol: Offset,
     ) -> Result<Option<(Self, f64)>> {
         let (vol, set) = match vol {
