@@ -4,7 +4,7 @@ use std::{
     time::Instant,
 };
 
-use futures::{stream::FuturesUnordered, StreamExt};
+use futures_util::{stream::FuturesUnordered, StreamExt};
 use log::{debug, trace, warn};
 use tokio::sync::RwLock;
 use zbus::names::OwnedBusName;

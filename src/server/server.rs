@@ -6,7 +6,7 @@ use std::{
 };
 
 use anyhow::{anyhow, Context};
-use futures::prelude::*;
+use futures_util::{FutureExt, StreamExt, TryFutureExt};
 use log::{debug, trace, warn};
 use tokio::{
     select,
@@ -26,39 +26,28 @@ pub(super) struct Server(Arc<Inner>);
 
 struct Inner {
     players: RwLock<PlayerMap>,
-    // prop_changed: MsgMatch,
+    stop_prop_changed: mpsc::Sender<()>,
 }
 
 impl Server {
     pub async fn new(conn: Arc<Connection>) -> Result<Server> {
         let players = RwLock::new(PlayerMap::new());
 
-        // let mut mr = MatchRule::new_signal("org.freedesktop.DBus.Properties", "PropertiesChanged");
-        // mr.path = Some(mpris::ENTRY_PATH.clone());
-        // mr.path_is_namespace = false;
+        let proxy = Proxy::new(
+            &*conn,
+            "org.freedesktop.DBus.Properties",
+            &*mpris::ENTRY_PATH,
+            "org.freedesktop.DBus.Properties",
+        )
+        .await
+        .context("failed to create properties proxy")?;
 
-        let (scan_tx, mut scan_rx) = mpsc::channel(1);
-        // let prop_changed = conn
-        //     .add_match(mr)
-        //     .await
-        //     .context("failed to listen for property changes")?
-        //     .cb(move |_, changed: PropertiesPropertiesChanged| {
-        //         if changed.interface_name.as_str() != &**mpris::player::INTERFACE {
-        //             debug!(
-        //                 "Ignoring PropertiesChanged for interface {:?}",
-        //                 changed.interface_name
-        //             );
-
-        //             return true;
-        //         }
-
-        //         scan_tx.try_send(()).ok();
-        //         true
-        //     });
+        let (stop_prop_changed, mut stop_rx) = mpsc::channel(1);
+        let mut evts = proxy.receive_signal("PropertiesChanged").await?;
 
         let this = Self(Arc::new(Inner {
             players,
-            // prop_changed,
+            stop_prop_changed,
         }));
 
         tokio::spawn({
@@ -66,13 +55,29 @@ impl Server {
             let conn = Arc::clone(&conn);
 
             async move {
-                'main: while let Some(()) = scan_rx.recv().await {
+                'main: while let Some(evt) = select! {
+                    evt = evts.next() => evt,
+                    _ = stop_rx.recv() => None,
+                } {
+                    if evt
+                        .interface()
+                        .map_or(false, |e| e != *mpris::player::INTERFACE)
+                    {
+                        debug!(
+                            "Ignoring PropertiesChanged for interface {:?}",
+                            evt.interface()
+                        );
+
+                        continue;
+                    }
+
                     debug!("Pending background scan...");
 
                     loop {
                         match select!(
-                            opt = scan_rx.recv() => opt.map(|()| false),
-                            () = tokio::time::sleep(Duration::from_millis(200)) => Some(true),
+                        opt = evts.next() => opt.map(|_| false),
+                        () = tokio::time::sleep(Duration::from_millis(200)) => Some(true),
+                        _ = stop_rx.recv() => None,
                         ) {
                             Some(true) => break,
                             Some(false) => (),
