@@ -182,13 +182,8 @@ impl Player {
     }
 
     pub async fn pause(self, conn: &Connection) -> Result<Self> {
-        self.call(
-            &mpris::player::INTERFACE,
-            &mpris::player::PAUSE,
-            conn,
-            &(),
-        )
-        .await?;
+        self.call(&mpris::player::INTERFACE, &mpris::player::PAUSE, conn, &())
+            .await?;
 
         Ok(Self {
             status: PlaybackStatus::Paused,
@@ -270,13 +265,8 @@ impl Player {
     }
 
     pub async fn set_volume(&self, conn: &Connection, vol: f64) -> Result<()> {
-        self.set(
-            &mpris::player::INTERFACE,
-            &mpris::player::VOLUME,
-            conn,
-            vol,
-        )
-        .await
+        self.set(&mpris::player::INTERFACE, &mpris::player::VOLUME, conn, vol)
+            .await
     }
 
     #[allow(clippy::cast_precision_loss)]
@@ -286,12 +276,8 @@ impl Player {
     }
 
     pub async fn can_go_next(&self, conn: &Connection) -> Result<bool> {
-        self.get(
-            &mpris::player::INTERFACE,
-            &mpris::player::CAN_GO_NEXT,
-            conn,
-        )
-        .await
+        self.get(&mpris::player::INTERFACE, &mpris::player::CAN_GO_NEXT, conn)
+            .await
     }
 
     pub async fn can_go_previous(&self, conn: &Connection) -> Result<bool> {
@@ -319,12 +305,8 @@ impl Player {
     }
 
     pub async fn can_control(&self, conn: &Connection) -> Result<bool> {
-        self.get(
-            &mpris::player::INTERFACE,
-            &mpris::player::CAN_CONTROL,
-            conn,
-        )
-        .await
+        self.get(&mpris::player::INTERFACE, &mpris::player::CAN_CONTROL, conn)
+            .await
     }
 
     //////// Empress-specific wrapper methods ////////

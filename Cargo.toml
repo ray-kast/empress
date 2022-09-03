@@ -19,6 +19,7 @@ lto = "thin"
 
 [dependencies]
 anyhow = "1.0.64"
+async-trait = "0.1.57"
 atty = "0.2.14"
 clap = { version = "3.2.20", features = ["derive"] }
 env_logger = "0.9.0"

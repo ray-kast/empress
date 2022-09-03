@@ -3,7 +3,6 @@ use std::{io, time::Duration};
 use anyhow::{Context, Error};
 use log::{info, trace, warn};
 use serde::{de::DeserializeOwned, Serialize};
-use tokio::select;
 use zbus::{
     zvariant::{DynamicType, Type},
     ConnectionBuilder, Proxy,
@@ -12,7 +11,7 @@ use zbus::{
 use crate::{
     format,
     server::{mpris, mpris::player::PlaybackStatus, OwnedNowPlayingResponse},
-    ClientCommand, MethodId, PlayerOpts, Result, INTERFACE_NAME, SERVER_NAME, SERVER_PATH,
+    ClientCommand, MethodId, Result, INTERFACE_NAME, SERVER_NAME, SERVER_PATH,
 };
 
 #[derive(Debug, Clone, Serialize)]
@@ -80,93 +79,66 @@ pub(super) async fn run(cmd: ClientCommand) -> Result {
         .build()
         .await
         .context("failed to connect to D-Bus")?;
-    // let (close_tx, close_rx) = oneshot::channel();
 
-    // task::spawn(async {
-    //     close_tx
-    //         .send(Error::from(res.await).context("D-Bus disconnected"))
-    //         .ok();
-    // });
+    // TODO: declare timeout
+    let proxy = Proxy::new(&conn, &*SERVER_NAME, &*SERVER_PATH, &*INTERFACE_NAME)
+        .await
+        .context("failed to create server proxy")?;
 
-    let run = async move {
-        // TODO: declare timeout
-        let proxy = Proxy::new(&conn, &*SERVER_NAME, &*SERVER_PATH, &*INTERFACE_NAME)
-            .await
-            .context("failed to create server proxy")?;
+    let id = cmd.id();
 
-        let id = cmd.id();
+    match cmd {
+        ClientCommand::Next(opts)
+        | ClientCommand::Previous(opts)
+        | ClientCommand::Pause(opts)
+        | ClientCommand::PlayPause(opts)
+        | ClientCommand::Stop(opts)
+        | ClientCommand::Play(opts) => {
+            try_send(&proxy, id, &(opts,)).await?;
+        },
+        ClientCommand::ListPlayers => {
+            let (players,): (Vec<(String, String)>,) = try_send(&proxy, id, &()).await?;
 
-        match cmd {
-            ClientCommand::Next(opts)
-            | ClientCommand::Previous(opts)
-            | ClientCommand::Pause(opts)
-            | ClientCommand::PlayPause(opts)
-            | ClientCommand::Stop(opts)
-            | ClientCommand::Play(opts) => {
-                let PlayerOpts {} = opts;
-                try_send(&proxy, id, &()).await?;
-            },
-            ClientCommand::ListPlayers => {
-                let (players,): (Vec<(String, String)>,) = try_send(&proxy, id, &()).await?;
+            for (player, status) in players {
+                println!("{}\t{}", player, status);
+            }
+        },
+        ClientCommand::NowPlaying { player, format } => {
+            let resp: OwnedNowPlayingResponse = try_send(&proxy, id, &(player,)).await?;
 
-                for (player, status) in players {
-                    println!("{}\t{}", player, status);
-                }
-            },
-            ClientCommand::NowPlaying {
-                player: PlayerOpts {},
-                format,
-            } => {
-                let resp: OwnedNowPlayingResponse = try_send(&proxy, id, &()).await?;
+            trace!("Full now-playing response: {:?}", resp);
 
-                trace!("Full now-playing response: {:?}", resp);
+            let resp: NowPlayingResult = resp.try_into()?;
 
-                let resp: NowPlayingResult = resp.try_into()?;
+            if let Some(format) = format {
+                print!("{}", format::eval(format, resp)?);
+            } else {
+                serde_json::to_writer(io::stdout(), &resp)?;
+            }
 
-                if let Some(format) = format {
-                    print!("{}", format::eval(format, resp)?);
-                } else {
-                    serde_json::to_writer(io::stdout(), &resp)?;
-                }
+            if atty::is(atty::Stream::Stdout) {
+                println!();
+            }
+        },
+        ClientCommand::Seek { player, to } => {
+            try_send(&proxy, id, &(player, to.offset())).await?;
+        },
+        ClientCommand::Volume { player, vol } => {
+            let (vol,): (f64,) = try_send(&proxy, id, &(player, vol.offset())).await?;
 
-                if atty::is(atty::Stream::Stdout) {
-                    println!();
-                }
-            },
-            ClientCommand::Seek {
-                player: PlayerOpts {},
-                to,
-            } => {
-                try_send(&proxy, id, &(to.offset(),)).await?;
-            },
-            ClientCommand::Volume {
-                player: PlayerOpts {},
-                vol,
-            } => {
-                let (vol,): (f64,) = try_send(&proxy, id, &(vol.offset(),)).await?;
+            print!("{}", vol);
 
-                print!("{}", vol);
+            if atty::is(atty::Stream::Stdout) {
+                println!();
+            }
+        },
+        ClientCommand::SwitchCurrent { to, no_play } => {
+            let switch_playing = !no_play;
+            try_send(&proxy, id, &(to, switch_playing)).await?;
+        },
+    }
 
-                if atty::is(atty::Stream::Stdout) {
-                    println!();
-                }
-            },
-            ClientCommand::SwitchCurrent { to, no_play } => {
-                let switch_playing = !no_play;
-                try_send(&proxy, id, &(to, switch_playing)).await?;
-            },
-        }
-
-        Ok(())
-    };
-
-    // TODO: this is redundant if the commented section is no longer necessary
-    select!(
-        res = run => res,
-        // err = close_rx => Err(
-        //     err.context("lost D-Bus connection resource").map_or_else(|e| e, |e| e)
-        // ),
-    )
+    Ok(())
 }
 
 async fn try_send<R: Type + DeserializeOwned + 'static, A: DynamicType + Serialize + Clone>(

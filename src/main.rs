@@ -1,4 +1,3 @@
-#![allow(dead_code)] // TODO: remove before merging
 #![deny(
     clippy::suspicious,
     clippy::style,
@@ -24,7 +23,7 @@ use log::{error, LevelFilter};
 use tokio::runtime::Builder as RtBuilder;
 use zbus::{
     names::{OwnedInterfaceName, OwnedWellKnownName},
-    zvariant::OwnedObjectPath,
+    zvariant::{self, OwnedObjectPath},
 };
 
 mod client;
@@ -47,8 +46,9 @@ lazy_static! {
 
 lazy_static! {
     static ref API_IDENT: String = format!("Empress{}", env!("CARGO_PKG_VERSION_MAJOR"));
-    static ref INTERFACE_NAME: OwnedInterfaceName =
-        format!("{}.Daemon", *NAME_PREFIX).try_into().unwrap();
+    static ref INTERFACE_NAME: OwnedInterfaceName = format!("net.ryan_s.{}.Daemon", *API_IDENT)
+        .try_into()
+        .unwrap();
     static ref SERVER_NAME: OwnedWellKnownName = NAME_PREFIX.as_str().try_into().unwrap();
     static ref SERVER_PATH: OwnedObjectPath =
         format!("{}/Daemon", *PATH_PREFIX).try_into().unwrap();
@@ -213,8 +213,11 @@ impl ClientCommand {
     }
 }
 
-#[derive(Debug, Clone, Parser)]
-struct PlayerOpts {} // WARNING: DO NOT TOUCH WITHOUT INCREMENTING MAJOR VERSION
+#[derive(
+    Debug, Clone, Parser, zvariant::SerializeDict, zvariant::DeserializeDict, zvariant::Type,
+)]
+#[zvariant(signature = "dict")]
+struct PlayerOpts {}
 
 #[derive(Debug, Clone, Copy)]
 enum Offset {

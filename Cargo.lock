@@ -229,6 +229,7 @@ name = "empress"
 version = "1.6.0"
 dependencies = [
  "anyhow",
+ "async-trait",
  "atty",
  "clap",
  "env_logger",
