@@ -1,4 +1,4 @@
-use std::{collections::HashMap, fmt, sync::Arc};
+use std::{collections::HashMap, fmt};
 
 use anyhow::{Context, Error};
 use log::{error, info};
@@ -42,16 +42,14 @@ pub(self) fn method_err(
 }
 
 pub async fn run() -> Result {
-    let conn = Arc::new(
-        ConnectionBuilder::session()
-            .context("failed to create connection builder")?
-            .build()
-            .await
-            .context("failed to connect to D-Bus")?,
-    );
+    let conn = ConnectionBuilder::session()
+        .context("failed to create connection builder")?
+        .build()
+        .await
+        .context("failed to connect to D-Bus")?;
 
     conn.object_server()
-        .at(&*SERVER_PATH, Server::new(Arc::clone(&conn)).await?)
+        .at(&*SERVER_PATH, Server::new(conn.clone()).await?)
         .await
         .context("failed to register server")?;
 

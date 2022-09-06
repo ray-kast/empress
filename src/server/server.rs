@@ -1,6 +1,7 @@
 use std::{
     collections::HashMap,
     future::Future,
+    mem,
     sync::Arc,
     time::{Duration, Instant},
 };
@@ -12,7 +13,9 @@ use tokio::{
     select,
     sync::{mpsc, RwLock},
 };
-use zbus::{zvariant::Value, Connection, Proxy};
+use zbus::{
+    fdo::DBusProxy, names::OwnedInterfaceName, zvariant::Value, Connection, Message, Proxy,
+};
 
 use super::{
     method_err, mpris, mpris::player::PlaybackStatus, NowPlayingResponse, Player, PlayerMap,
@@ -20,76 +23,127 @@ use super::{
 };
 use crate::{MethodId, Offset, PlayerOpts, Result};
 
-#[derive(Clone)]
-#[repr(transparent)]
-pub(super) struct Server(Arc<Inner>);
+struct SignalMatcher<'a> {
+    dbus: DBusProxy<'a>,
+    expr: String,
+}
 
-struct Inner {
-    players: RwLock<PlayerMap>,
+impl<'a> Drop for SignalMatcher<'a> {
+    fn drop(&mut self) {
+        tokio::runtime::Builder::new_current_thread()
+            .build()
+            .unwrap()
+            .block_on(async move { self.dbus.remove_match(&mem::take(&mut self.expr)).await })
+            .expect("removing signal listener failed");
+    }
+}
+
+#[derive(Clone)]
+pub(super) struct Server {
+    shared: Arc<Shared>,
+    #[allow(dead_code)]
     stop_prop_changed: mpsc::Sender<()>,
 }
 
+struct Shared {
+    players: RwLock<PlayerMap>,
+}
+
 impl Server {
-    pub async fn new(conn: Arc<Connection>) -> Result<Server> {
+    fn filter_prop_changed(msg: &Message) -> bool {
+        let iface = msg.interface();
+        let memb = msg.member();
+
+        if iface.map_or(true, |i| i != "org.freedesktop.DBus.Properties")
+            || memb.map_or(true, |m| m != "PropertiesChanged")
+        {
+            return false;
+        }
+
+        let (iface, _props, _) =
+            match msg.body::<(OwnedInterfaceName, HashMap<String, Value>, Vec<String>)>() {
+                Ok(b) => b,
+                Err(e) => {
+                    debug!(
+                        "Failed to deserialize possible PropertiesChanged event: {}",
+                        e
+                    );
+
+                    return false;
+                },
+            };
+
+        if iface != mpris::player::INTERFACE.as_ref() {
+            return false;
+        }
+
+        true
+    }
+
+    pub async fn new(conn: Connection) -> Result<Server> {
         let players = RwLock::new(PlayerMap::new());
-
-        let proxy = Proxy::new(
-            &*conn,
-            "org.freedesktop.DBus.Properties",
-            &*mpris::ENTRY_PATH,
-            "org.freedesktop.DBus.Properties",
-        )
-        .await
-        .context("failed to create properties proxy")?;
-
         let (stop_prop_changed, mut stop_rx) = mpsc::channel(1);
-        let mut evts = proxy.receive_signal("PropertiesChanged").await?;
-
-        let this = Self(Arc::new(Inner {
-            players,
+        let this = Self {
+            shared: Arc::new(Shared { players }),
             stop_prop_changed,
-        }));
+        };
+
+        let dbus = DBusProxy::new(&conn)
+            .await
+            .context("Failed to create DBus proxy")?;
+        let expr = concat!(
+            "type='signal',",
+            "interface='org.freedesktop.DBus.Properties',",
+            "member='PropertiesChanged'"
+        )
+        .to_owned();
+        let mut msgs = zbus::MessageStream::from(conn.clone());
+
+        dbus.add_match(&expr)
+            .await
+            .context("Failed to add message match rule")?;
+        let matcher = SignalMatcher { dbus, expr };
 
         tokio::spawn({
             let this = this.clone();
-            let conn = Arc::clone(&conn);
+            let conn = conn.clone();
 
             async move {
-                'main: while let Some(evt) = select! {
-                    evt = evts.next() => evt,
+                'main: while let Some(msg) = select! {
+                    msg = msgs.next() => msg,
                     _ = stop_rx.recv() => None,
                 } {
-                    if evt
-                        .interface()
-                        .map_or(false, |e| e != *mpris::player::INTERFACE)
-                    {
-                        debug!(
-                            "Ignoring PropertiesChanged for interface {:?}",
-                            evt.interface()
-                        );
+                    // TODO: kill the server
+                    let msg = msg.context("Received error message").unwrap();
 
+                    trace!("{:?}", msg);
+
+                    if !Self::filter_prop_changed(&msg) {
                         continue;
                     }
 
                     debug!("Pending background scan...");
 
                     loop {
-                        match select!(
-                        opt = evts.next() => opt.map(|_| false),
-                        () = tokio::time::sleep(Duration::from_millis(200)) => Some(true),
-                        _ = stop_rx.recv() => None,
-                        ) {
+                        // TODO: unsure if draining messages is necessary anymore
+                        match select! {
+                            m = msgs.next() => m.map(|_| false),
+                            () = tokio::time::sleep(Duration::from_millis(200)) => Some(true),
+                            _ = stop_rx.recv() => None,
+                        } {
                             Some(true) => break,
                             Some(false) => (),
                             None => break 'main,
                         }
                     }
 
-                    match this.scan(&*conn, true).await {
+                    match this.scan(&conn, true).await {
                         Ok(()) => (),
                         Err(e) => warn!("Background scan failed: {:?}", e),
                     }
                 }
+
+                mem::drop(matcher);
             }
         });
 
@@ -122,7 +176,7 @@ impl Server {
             .context("failed to call ListNames")?;
 
         PlayerMap::inform(
-            &self.0.players,
+            &self.shared.players,
             force,
             names
                 .into_iter()
@@ -147,7 +201,7 @@ impl Server {
         &self,
         f: F,
     ) -> Result<Option<T>> {
-        let mut players = self.0.players.write().await;
+        let mut players = self.shared.players.write().await;
         let mut patch = Err(None);
 
         for player in players.iter_active() {
@@ -179,7 +233,7 @@ impl Server {
         &self,
         f: F,
     ) -> Result<Option<T>> {
-        let players = self.0.players.read().await;
+        let players = self.shared.players.read().await;
         let mut default = Err(None);
 
         for player in players.iter_active() {
@@ -237,7 +291,7 @@ impl Server {
             MethodId::ListPlayers,
             || async {
                 Ok((self
-                    .0
+                    .shared
                     .players
                     .read()
                     .await
@@ -498,7 +552,7 @@ impl Server {
                     .try_into()
                     .map_err(|s| anyhow!("{:?} is not a valid bus name", s))?;
 
-                let curr = match self.0.players.write().await.remove(&bus) {
+                let curr = match self.shared.players.write().await.remove(&bus) {
                     Some(c) => c,
                     None => return Err(anyhow!("no players stored with the given bus name")),
                 };
@@ -506,7 +560,7 @@ impl Server {
                 let mut curr = if switch_playing {
                     let mut put = vec![];
 
-                    for player in self.0.players.read().await.iter_all() {
+                    for player in self.shared.players.read().await.iter_all() {
                         if player.playback_status(conn).await? == PlaybackStatus::Playing
                             && player.can_pause(conn).await?
                         {
@@ -514,7 +568,7 @@ impl Server {
                         }
                     }
 
-                    let mut players = self.0.players.write().await;
+                    let mut players = self.shared.players.write().await;
 
                     for bus in put {
                         let ply = players.remove(&bus).unwrap();
@@ -532,7 +586,7 @@ impl Server {
                 };
 
                 curr.last_update = Instant::now();
-                self.0.players.write().await.put(curr);
+                self.shared.players.write().await.put(curr);
 
                 Ok(())
             },
