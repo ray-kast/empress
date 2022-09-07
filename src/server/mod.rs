@@ -9,7 +9,7 @@ use tokio::{
 };
 use zbus::{
     fdo::{Error as ZError, Result as ZResult},
-    zvariant::{OwnedValue, Value},
+    zvariant::OwnedValue,
     ConnectionBuilder,
 };
 
@@ -21,23 +21,15 @@ mod player_map;
 #[allow(clippy::module_inception)] // I'm aware, but the struct is called Server
 mod server;
 
-pub type NowPlayingResponse<'a> = (HashMap<String, Value<'a>>, String);
+// pub type NowPlayingResponse<'a> = (HashMap<String, Value<'a>>, String);
 pub type OwnedNowPlayingResponse = (HashMap<String, OwnedValue>, String);
 
 pub(self) use player::Player;
 pub(self) use player_map::PlayerMap;
 
-pub(self) fn method_err(
-    method: impl fmt::Display,
-    e: impl Into<Error>,
-    msg: impl fmt::Display,
-) -> ZError {
+pub(self) fn method_err(e: impl Into<Error>, msg: impl fmt::Display) -> ZError {
     let msg = msg.to_string();
-    error!(
-        "Method hander for {} failed: {:?}",
-        method,
-        e.into().context(msg.clone())
-    );
+    error!("Method hander failed: {:?}", e.into().context(msg.clone()));
     ZError::Failed(msg)
 }
 

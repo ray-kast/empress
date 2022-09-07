@@ -14,14 +14,17 @@ use tokio::{
     sync::{mpsc, RwLock},
 };
 use zbus::{
-    fdo::DBusProxy, names::OwnedInterfaceName, zvariant::Value, Connection, Message, Proxy,
+    fdo::{self, DBusProxy},
+    names::{OwnedBusName, OwnedInterfaceName},
+    zvariant::{OwnedValue, Str, Value},
+    Connection, Message,
 };
 
 use super::{
-    method_err, mpris, mpris::player::PlaybackStatus, NowPlayingResponse, Player, PlayerMap,
+    method_err, mpris, mpris::player::PlaybackStatus, OwnedNowPlayingResponse, Player, PlayerMap,
     ZResult,
 };
-use crate::{MethodId, Offset, PlayerOpts, Result};
+use crate::{Offset, PlayerOpts, Result};
 
 struct SignalMatcher<'a> {
     dbus: DBusProxy<'a>,
@@ -41,6 +44,7 @@ impl<'a> Drop for SignalMatcher<'a> {
 #[derive(Clone)]
 pub(super) struct Server {
     shared: Arc<Shared>,
+    dbus: DBusProxy<'static>,
     #[allow(dead_code)]
     stop_prop_changed: mpsc::Sender<()>,
 }
@@ -80,17 +84,19 @@ impl Server {
         true
     }
 
-    pub async fn new(conn: Connection) -> Result<Server> {
+    pub async fn new(conn: Connection) -> Result<Self> {
         let players = RwLock::new(PlayerMap::new());
         let (stop_prop_changed, mut stop_rx) = mpsc::channel(1);
+        let dbus = DBusProxy::new(&conn)
+            .await
+            .context("Failed to create D-Bus proxy")?;
+
         let this = Self {
             shared: Arc::new(Shared { players }),
+            dbus: dbus.clone(),
             stop_prop_changed,
         };
 
-        let dbus = DBusProxy::new(&conn)
-            .await
-            .context("Failed to create DBus proxy")?;
         let expr = concat!(
             "type='signal',",
             "interface='org.freedesktop.DBus.Properties',",
@@ -160,18 +166,10 @@ impl Server {
             trace!("Running quick scan...");
         }
 
-        let proxy = Proxy::new(
-            conn,
-            "org.freedesktop.DBus",
-            "/org/freedesktop/DBus",
-            "org.freedesktop.DBus",
-        )
-        .await
-        .context("Failed to create root D-Bus proxy")?;
-
         let now = Instant::now();
-        let (names,): (Vec<String>,) = proxy
-            .call("ListNames", &())
+        let names = self
+            .dbus
+            .list_names()
             .await
             .context("Failed to call ListNames")?;
 
@@ -267,15 +265,14 @@ impl Server {
     >(
         &self,
         conn: &Connection,
-        id: MethodId,
         f: F,
         msg: E,
     ) -> ZResult<T> {
         self.scan(conn, false)
             .await
-            .map_err(|e| method_err(id, e, "Failed to scan for players"))?;
+            .map_err(|e| method_err(e, "Failed to scan for players"))?;
 
-        f().await.map_err(|e| method_err(id, e, msg))
+        f().await.map_err(|e| method_err(e, msg))
     }
 }
 
@@ -285,24 +282,23 @@ impl Server {
     pub async fn list_players(
         &self,
         #[zbus(connection)] conn: &Connection,
-    ) -> zbus::fdo::Result<(Vec<(String, String)>,)> {
+    ) -> fdo::Result<Vec<(String, String)>> {
         self.handle_method(
             conn,
-            MethodId::ListPlayers,
             || async {
-                Ok((self
+                Ok(self
                     .shared
                     .players
                     .read()
                     .await
                     .iter_all()
                     .filter_map(|p| {
-                        p.bus
+                        p.bus()
                             .strip_prefix(mpris::BUS_NAME.as_str())
                             .and_then(|s| s.strip_prefix('.'))
-                            .map(|s| (s.into(), p.status.to_string()))
+                            .map(|s| (s.into(), p.status().to_string()))
                     })
-                    .collect(),))
+                    .collect())
             },
             "Failed to list players",
         )
@@ -313,46 +309,48 @@ impl Server {
         &self,
         #[zbus(connection)] conn: &Connection,
         PlayerOpts {}: PlayerOpts,
-    ) -> zbus::fdo::Result<NowPlayingResponse> {
+    ) -> fdo::Result<OwnedNowPlayingResponse> {
         self.handle_method(
             conn,
-            MethodId::NowPlaying,
             || {
                 self.peek_player_with(|p| async move {
-                    let meta = p.metadata(conn).await?;
+                    let meta = p.metadata().await?;
 
                     let has_track = meta
                         .get(mpris::track_list::ATTR_TRACKID)
-                        .map_or(false, |v| match v {
-                            Value::ObjectPath(p) => *p != mpris::track_list::NO_TRACK.as_ref(),
+                        .map_or(false, |v| match v.into() {
+                            Value::ObjectPath(p) => p != mpris::track_list::NO_TRACK.as_ref(),
                             _ => false,
                         });
 
                     let bus = p
-                        .bus
+                        .bus()
                         .strip_prefix(mpris::BUS_NAME.as_str())
                         .and_then(|s| s.strip_prefix('.'))
                         .map_or_else(String::new, Into::into);
-                    let ident = p.identity(conn).await?;
+                    let ident = p.identity().await?;
 
                     // Properties that should go into the map regardless of if we have a track
-                    let extra_props: [(String, Value); 2] = [
-                        (crate::metadata::PLAYER_BUS.into(), bus.into()),
-                        (crate::metadata::PLAYER_IDENTITY.into(), ident.into()),
+                    let extra_props: [(String, OwnedValue); 2] = [
+                        (crate::metadata::PLAYER_BUS.into(), Str::from(bus).into()),
+                        (
+                            crate::metadata::PLAYER_IDENTITY.into(),
+                            Str::from(ident).into(),
+                        ),
                     ];
 
                     Ok(Some(if has_track {
                         let mut meta: HashMap<_, _> = meta.into_iter().chain(extra_props).collect();
 
-                        let pos = p.position(conn).await.ok();
+                        let pos = p.position().await.ok();
 
                         if let Some(pos) = pos {
                             meta.insert(crate::metadata::POSITION.into(), pos.into());
                         }
 
-                        (meta, p.status)
+                        (meta, p.status())
                     } else {
-                        (extra_props.into_iter().collect(), p.status)
+                        (extra_props.into_iter().collect(), p.status())
                     }))
                 })
                 .map_ok(|ok| {
@@ -371,11 +369,10 @@ impl Server {
         &self,
         #[zbus(connection)] conn: &Connection,
         PlayerOpts {}: PlayerOpts,
-    ) -> zbus::fdo::Result<()> {
+    ) -> fdo::Result<()> {
         self.handle_method(
             conn,
-            MethodId::Next,
-            || self.process_player(|p| p.try_next(conn)).map_ok(|_| ()),
+            || self.process_player(Player::try_next).map_ok(|_| ()),
             "Failed to skip forward on a player",
         )
         .await
@@ -385,11 +382,10 @@ impl Server {
         &self,
         #[zbus(connection)] conn: &Connection,
         PlayerOpts {}: PlayerOpts,
-    ) -> zbus::fdo::Result<()> {
+    ) -> fdo::Result<()> {
         self.handle_method(
             conn,
-            MethodId::Previous,
-            || self.process_player(|p| p.try_previous(conn)).map_ok(|_| ()),
+            || self.process_player(Player::try_previous).map_ok(|_| ()),
             "Failed to skip backward on a player",
         )
         .await
@@ -399,11 +395,10 @@ impl Server {
         &self,
         #[zbus(connection)] conn: &Connection,
         PlayerOpts {}: PlayerOpts,
-    ) -> zbus::fdo::Result<()> {
+    ) -> fdo::Result<()> {
         self.handle_method(
             conn,
-            MethodId::Pause,
-            || self.process_player(|p| p.try_pause(conn)).map_ok(|_| ()),
+            || self.process_player(Player::try_pause).map_ok(|_| ()),
             "Failed to pause a player",
         )
         .await
@@ -413,14 +408,10 @@ impl Server {
         &self,
         #[zbus(connection)] conn: &Connection,
         PlayerOpts {}: PlayerOpts,
-    ) -> zbus::fdo::Result<()> {
+    ) -> fdo::Result<()> {
         self.handle_method(
             conn,
-            MethodId::PlayPause,
-            || {
-                self.process_player(|p| p.try_play_pause(conn))
-                    .map_ok(|_| ())
-            },
+            || self.process_player(Player::try_play_pause).map_ok(|_| ()),
             "Failed to play or pause a player",
         )
         .await
@@ -430,11 +421,10 @@ impl Server {
         &self,
         #[zbus(connection)] conn: &Connection,
         PlayerOpts {}: PlayerOpts,
-    ) -> zbus::fdo::Result<()> {
+    ) -> fdo::Result<()> {
         self.handle_method(
             conn,
-            MethodId::Stop,
-            || self.process_player(|p| p.try_stop(conn)).map_ok(|_| ()),
+            || self.process_player(Player::try_stop).map_ok(|_| ()),
             "Failed to stop a player",
         )
         .await
@@ -444,11 +434,10 @@ impl Server {
         &self,
         #[zbus(connection)] conn: &Connection,
         PlayerOpts {}: PlayerOpts,
-    ) -> zbus::fdo::Result<()> {
+    ) -> fdo::Result<()> {
         self.handle_method(
             conn,
-            MethodId::Stop,
-            || self.process_player(|p| p.try_play(conn)).map_ok(|_| ()),
+            || self.process_player(Player::try_play).map_ok(|_| ()),
             "Failed to play a player",
         )
         .await
@@ -459,16 +448,12 @@ impl Server {
         #[zbus(connection)] conn: &Connection,
         PlayerOpts {}: PlayerOpts,
         to: f64,
-    ) -> zbus::fdo::Result<(f64,)> {
+    ) -> fdo::Result<f64> {
         self.handle_method(
             conn,
-            MethodId::SeekRelative,
             || {
-                self.process_player_with(|p| p.try_seek(conn, Offset::Relative(to)))
-                    .map(|p| {
-                        p?.ok_or_else(|| anyhow!("No players available to seek"))
-                            .map(|p| (p,))
-                    })
+                self.process_player_with(|p| p.try_seek(Offset::Relative(to)))
+                    .map(|p| p?.ok_or_else(|| anyhow!("No players available to seek")))
             },
             "Failed to seek a player",
         )
@@ -480,16 +465,12 @@ impl Server {
         #[zbus(connection)] conn: &Connection,
         PlayerOpts {}: PlayerOpts,
         to: f64,
-    ) -> zbus::fdo::Result<(f64,)> {
+    ) -> fdo::Result<f64> {
         self.handle_method(
             conn,
-            MethodId::SeekAbsolute,
             || {
-                self.process_player_with(|p| p.try_seek(conn, Offset::Absolute(to)))
-                    .map(|p| {
-                        p?.ok_or_else(|| anyhow!("No players available to seek"))
-                            .map(|p| (p,))
-                    })
+                self.process_player_with(|p| p.try_seek(Offset::Absolute(to)))
+                    .map(|p| p?.ok_or_else(|| anyhow!("No players available to seek")))
             },
             "Failed to seek a player",
         )
@@ -501,16 +482,12 @@ impl Server {
         #[zbus(connection)] conn: &Connection,
         PlayerOpts {}: PlayerOpts,
         to: f64,
-    ) -> zbus::fdo::Result<(f64,)> {
+    ) -> fdo::Result<f64> {
         self.handle_method(
             conn,
-            MethodId::VolRelative,
             || {
-                self.process_player_with(|p| p.try_set_volume(conn, Offset::Relative(to)))
-                    .map(|p| {
-                        p?.ok_or_else(|| anyhow!("No players available to get/adjust volume"))
-                            .map(|p| (p,))
-                    })
+                self.process_player_with(|p| p.try_set_volume(Offset::Relative(to)))
+                    .map(|p| p?.ok_or_else(|| anyhow!("No players available to get/adjust volume")))
             },
             "Failed to get/adjust a player's volume",
         )
@@ -522,16 +499,12 @@ impl Server {
         #[zbus(connection)] conn: &Connection,
         PlayerOpts {}: PlayerOpts,
         to: f64,
-    ) -> zbus::fdo::Result<(f64,)> {
+    ) -> fdo::Result<f64> {
         self.handle_method(
             conn,
-            MethodId::VolAbsolute,
             || {
-                self.process_player_with(|p| p.try_set_volume(conn, Offset::Absolute(to)))
-                    .map(|p| {
-                        p?.ok_or_else(|| anyhow!("No players available to set volume"))
-                            .map(|p| (p,))
-                    })
+                self.process_player_with(|p| p.try_set_volume(Offset::Absolute(to)))
+                    .map(|p| p?.ok_or_else(|| anyhow!("No players available to set volume")))
             },
             "Failed to set a player's volume",
         )
@@ -543,10 +516,9 @@ impl Server {
         #[zbus(connection)] conn: &Connection,
         to: &str,
         switch_playing: bool,
-    ) -> zbus::fdo::Result<()> {
+    ) -> fdo::Result<()> {
         self.handle_method(
             conn,
-            MethodId::SwitchCurrent,
             || async {
                 let bus = format!("{}.{}", *mpris::BUS_NAME, to)
                     .try_into()
@@ -559,33 +531,34 @@ impl Server {
 
                 let mut curr = if switch_playing {
                     let mut put = vec![];
+                    let mut players = self.shared.players.write().await;
 
-                    for player in self.shared.players.read().await.iter_all() {
-                        if player.playback_status(conn).await? == PlaybackStatus::Playing
-                            && player.can_pause(conn).await?
+                    for player in players.iter_all() {
+                        if player.playback_status().await? == PlaybackStatus::Playing
+                            && player.can_pause().await?
                         {
-                            put.push(player.bus.clone());
+                            put.push(OwnedBusName::from(player.bus().to_owned()));
                         }
                     }
 
-                    let mut players = self.shared.players.write().await;
-
                     for bus in put {
-                        let ply = players.remove(&bus).unwrap();
-
-                        ply.pause(conn)
+                        let player = players.remove(&bus.into()).unwrap();
+                        let player = player
+                            .pause()
                             .await
                             .context("Failed to pause another player")?;
+
+                        players.put(player);
                     }
 
-                    curr.play(conn)
+                    curr.play()
                         .await
                         .context("Failed to play selected player")?
                 } else {
                     curr
                 };
 
-                curr.last_update = Instant::now();
+                curr.force_update();
                 self.shared.players.write().await.put(curr);
 
                 Ok(())

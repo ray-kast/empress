@@ -7,34 +7,61 @@ use std::{
 use futures_util::{stream::FuturesUnordered, StreamExt};
 use log::{debug, trace, warn};
 use tokio::sync::RwLock;
-use zbus::names::OwnedBusName;
+use zbus::names::BusName;
 
 use super::{mpris::player::PlaybackStatus, Player};
 use crate::Result;
 
+// TODO: can this be zero-copy?
+#[derive(Debug, PartialEq, Eq, PartialOrd, Ord)]
+struct PlayerKey {
+    status: PlaybackStatus,
+    last_update: Instant,
+    bus: BusName<'static>,
+}
+
+trait GetKey {
+    fn get_key(&self) -> PlayerKey;
+}
+
+impl GetKey for Player {
+    fn get_key(&self) -> PlayerKey {
+        PlayerKey {
+            status: self.status(),
+            last_update: self.last_update(),
+            bus: self.bus().to_owned(),
+        }
+    }
+}
+
 #[derive(Debug)]
-pub(super) struct PlayerMap(
-    HashMap<OwnedBusName, (PlaybackStatus, Instant)>,
-    BTreeSet<Player>,
-);
+pub(super) struct PlayerMap {
+    players: HashMap<BusName<'static>, Player>,
+    keys: BTreeSet<PlayerKey>,
+}
 
 impl PlayerMap {
-    pub async fn inform<P: Fn(&OwnedBusName) -> PR + Copy, PR: Future<Output = Result<Player>>>(
+    pub async fn inform<
+        P: Fn(&BusName<'static>) -> PR + Copy,
+        PR: Future<Output = Result<Player>>,
+    >(
         this: &RwLock<Self>,
         try_patch: bool,
-        names: HashSet<OwnedBusName>,
+        names: HashSet<BusName<'static>>,
         player: P,
     ) {
         use std::collections::hash_map::Entry;
 
-        let key_set = this.read().await.0.keys().cloned().collect();
+        let key_set = this.read().await.players.keys().cloned().collect();
 
         if try_patch {
-            let vec = names
+            // TODO: creating a new player should be avoided given the zbus
+            //       proxies contain non-trivial caching logic
+            let vec: Vec<_> = names
                 .intersection(&key_set)
                 .map(|n| async move { (n, player(n).await) })
                 .collect::<FuturesUnordered<_>>()
-                .collect::<Vec<_>>()
+                .collect()
                 .await;
 
             let mut this = this.write().await;
@@ -47,9 +74,11 @@ impl PlayerMap {
                         continue;
                     },
                 };
-                let (status, last_update) = this.0.get(name).unwrap();
+                let old_player = this.players.get(name).unwrap();
 
-                if player.status != *status || player.last_update < *last_update {
+                if player.status() != old_player.status()
+                    || player.last_update() < old_player.last_update()
+                {
                     this.put(player);
                 } else {
                     trace!("Skipping map update for player: {:?}", player);
@@ -60,10 +89,13 @@ impl PlayerMap {
                 assert!(this.remove(name).is_some());
             }
         } else {
-            let mut this = this.write().await;
+            let PlayerMap {
+                ref mut players,
+                ref mut keys,
+            } = *this.write().await;
 
             for name in names.symmetric_difference(&key_set) {
-                match this.0.entry(name.clone()) {
+                match players.entry(name.clone()) {
                     Entry::Vacant(v) => {
                         let player = match player(v.key()).await {
                             Ok(p) => p,
@@ -75,28 +107,31 @@ impl PlayerMap {
 
                         trace!("Quick-adding new player to map: {:?}", player);
 
-                        v.insert((player.status, player.last_update));
-                        this.1.insert(player);
+                        keys.insert(player.get_key());
+                        v.insert(player);
                     },
                     Entry::Occupied(o) => {
-                        let (bus, (status, last_update)) = o.remove_entry();
+                        let (bus, player) = o.remove_entry();
 
                         trace!("Quick-removing player from map: {:?}", bus);
 
-                        assert!(this.1.remove(&Player {
-                            status,
-                            last_update,
-                            bus
-                        }));
+                        assert!(keys.remove(&player.get_key()));
                     },
                 }
             }
         }
     }
 
-    pub fn new() -> Self { Self(HashMap::new(), BTreeSet::new()) }
+    pub fn new() -> Self {
+        Self {
+            players: HashMap::new(),
+            keys: BTreeSet::new(),
+        }
+    }
 
-    pub fn iter_all(&self) -> impl Iterator<Item = &Player> { self.1.iter() }
+    pub fn iter_all(&self) -> impl Iterator<Item = &Player> {
+        self.keys.iter().map(|k| &self.players[&k.bus])
+    }
 
     /// Returns all players whose status matches that of the first (i.e.
     /// highest-priority) player in the list.  This should be used when
@@ -104,59 +139,52 @@ impl PlayerMap {
     pub fn iter_active(&self) -> impl Iterator<Item = &Player> {
         let mut prev = None;
 
-        self.1.iter().take_while(move |p| {
-            let ret = prev.map_or(true, |s| s == p.status);
-            prev = Some(p.status);
+        self.keys
+            .iter()
+            .take_while(move |p| {
+                let ret = prev.map_or(true, |s| s == p.status);
+                prev = Some(p.status);
 
-            if !ret {
-                debug!("Stopping active-player search before {:?}", p);
-            }
+                if !ret {
+                    debug!("Stopping active-player search before {:?}", p);
+                }
 
-            ret
-        })
+                ret
+            })
+            .map(|k| &self.players[&k.bus])
     }
 
     /// Always updates the map, but only returns true if a new key was inserted
     pub fn put(&mut self, player: Player) -> bool {
         use std::collections::hash_map::Entry;
 
-        match self.0.entry(player.bus.clone()) {
+        match self.players.entry(player.bus().to_owned()) {
             Entry::Vacant(v) => {
                 trace!("Inserting new player into map: {:?}", player);
 
-                v.insert((player.status, player.last_update));
-                self.1.insert(player);
+                self.keys.insert(player.get_key());
+                v.insert(player);
                 true
             },
             Entry::Occupied(o) => {
                 trace!("Patching existing player in map: {:?}", player);
 
-                let (status, last_update) = *o.get();
-                assert!(self.1.remove(&Player {
-                    status,
-                    last_update,
-                    bus: player.bus.clone()
-                }));
-                *o.into_mut() = (player.status, player.last_update);
-                self.1.insert(player);
+                let old_player = o.into_mut();
+                assert!(self.keys.remove(&old_player.get_key()));
+                self.keys.insert(player.get_key());
+                *old_player = player;
                 false
             },
         }
     }
 
-    pub fn remove(&mut self, bus: &OwnedBusName) -> Option<Player> {
-        if let Some((status, last_update)) = self.0.remove(bus) {
+    pub fn remove(&mut self, bus: &BusName<'static>) -> Option<Player> {
+        if let Some(old_player) = self.players.remove(bus) {
             trace!("Removing player from map: {:?}", bus);
 
-            let ply = Player {
-                status,
-                last_update,
-                bus: bus.clone(),
-            };
+            assert!(self.keys.remove(&old_player.get_key()));
 
-            assert!(self.1.remove(&ply));
-
-            Some(ply)
+            Some(old_player)
         } else {
             trace!("Player to remove does not exist in map: {:?}", bus);
 

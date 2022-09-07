@@ -1,49 +1,71 @@
-#![allow(clippy::needless_borrow)] // Clippy bug
+use std::collections::HashMap;
 
 use lazy_static::lazy_static;
 use zbus::{
-    names::{OwnedBusName, OwnedInterfaceName, OwnedMemberName},
-    zvariant::OwnedObjectPath,
+    dbus_proxy, fdo,
+    names::OwnedBusName,
+    zvariant::{ObjectPath, OwnedObjectPath, OwnedValue},
 };
 
 lazy_static! {
     pub static ref NAME_PREFIX: String = "org.mpris.MediaPlayer2".into();
-    pub static ref PATH_PREFIX: String = "/org/mpris/MediaPlayer2".into();
     pub static ref BUS_NAME: OwnedBusName = NAME_PREFIX.as_str().try_into().unwrap();
-    pub static ref ENTRY_PATH: OwnedObjectPath = PATH_PREFIX.as_str().try_into().unwrap();
 }
 
-pub mod root {
-    use super::{lazy_static, OwnedInterfaceName, OwnedMemberName, NAME_PREFIX};
+#[dbus_proxy(
+    interface = "org.mpris.MediaPlayer2",
+    default_path = "/org/mpris/MediaPlayer2"
+)]
+pub trait MediaPlayer {
+    #[dbus_proxy(property)]
+    fn identity(&self) -> fdo::Result<String>;
+}
 
-    lazy_static! {
-        pub static ref INTERFACE: OwnedInterfaceName = NAME_PREFIX.clone().try_into().unwrap();
-        pub static ref IDENTITY: OwnedMemberName = "Identity".try_into().unwrap();
-    }
+#[dbus_proxy(
+    interface = "org.mpris.MediaPlayer2.Player",
+    default_path = "/org/mpris/MediaPlayer2"
+)]
+pub trait Player {
+    fn next(&self) -> fdo::Result<()>;
+    fn previous(&self) -> fdo::Result<()>;
+    fn pause(&self) -> fdo::Result<()>;
+    fn play_pause(&self) -> fdo::Result<()>;
+    fn stop(&self) -> fdo::Result<()>;
+    fn play(&self) -> fdo::Result<()>;
+    fn set_position(&self, track: ObjectPath<'_>, pos: i64) -> fdo::Result<()>;
+
+    #[dbus_proxy(property)]
+    fn playback_status(&self) -> fdo::Result<String>;
+    #[dbus_proxy(property)]
+    fn metadata(&self) -> fdo::Result<HashMap<String, OwnedValue>>;
+    #[dbus_proxy(property)]
+    fn volume(&self) -> fdo::Result<f64>;
+    #[dbus_proxy(property)]
+    fn set_volume(&self, vol: f64) -> fdo::Result<()>;
+    #[dbus_proxy(property)]
+    fn position(&self) -> fdo::Result<i64>;
+    #[dbus_proxy(property)]
+    fn can_go_next(&self) -> fdo::Result<bool>;
+    #[dbus_proxy(property)]
+    fn can_go_previous(&self) -> fdo::Result<bool>;
+    #[dbus_proxy(property)]
+    fn can_play(&self) -> fdo::Result<bool>;
+    #[dbus_proxy(property)]
+    fn can_pause(&self) -> fdo::Result<bool>;
+    #[dbus_proxy(property)]
+    fn can_seek(&self) -> fdo::Result<bool>;
+    #[dbus_proxy(property)]
+    fn can_control(&self) -> fdo::Result<bool>;
 }
 
 pub mod player {
-    use super::{lazy_static, OwnedInterfaceName, OwnedMemberName, NAME_PREFIX};
+    use zbus::names::OwnedInterfaceName;
+
+    use super::{lazy_static, NAME_PREFIX};
 
     lazy_static! {
         pub static ref INTERFACE: OwnedInterfaceName =
             format!("{}.Player", *NAME_PREFIX).try_into().unwrap();
-        pub static ref NEXT: OwnedMemberName = "Next".try_into().unwrap();
-        pub static ref PREVIOUS: OwnedMemberName = "Previous".try_into().unwrap();
-        pub static ref PAUSE: OwnedMemberName = "Pause".try_into().unwrap();
-        pub static ref STOP: OwnedMemberName = "Stop".try_into().unwrap();
-        pub static ref PLAY: OwnedMemberName = "Play".try_into().unwrap();
-        pub static ref SET_POSITION: OwnedMemberName = "SetPosition".try_into().unwrap();
-        pub static ref PLAYBACK_STATUS: OwnedMemberName = "PlaybackStatus".try_into().unwrap();
-        pub static ref METADATA: OwnedMemberName = "Metadata".try_into().unwrap();
-        pub static ref VOLUME: OwnedMemberName = "Volume".try_into().unwrap();
-        pub static ref POSITION: OwnedMemberName = "Position".try_into().unwrap();
-        pub static ref CAN_GO_NEXT: OwnedMemberName = "CanGoNext".try_into().unwrap();
-        pub static ref CAN_GO_PREVIOUS: OwnedMemberName = "CanGoPrevious".try_into().unwrap();
-        pub static ref CAN_PLAY: OwnedMemberName = "CanPlay".try_into().unwrap();
-        pub static ref CAN_PAUSE: OwnedMemberName = "CanPause".try_into().unwrap();
-        pub static ref CAN_SEEK: OwnedMemberName = "CanSeek".try_into().unwrap();
-        pub static ref CAN_CONTROL: OwnedMemberName = "CanControl".try_into().unwrap();
     }
 
     #[derive(
@@ -66,8 +88,8 @@ pub mod track_list {
     pub const ATTR_ALBUM: &str = "xesam:album";
 
     lazy_static! {
-        pub static ref PATH_PREFIX: String = format!("{}/TrackList", *super::PATH_PREFIX);
-        pub static ref NO_TRACK: OwnedObjectPath =
-            format!("{}/NoTrack", *PATH_PREFIX).try_into().unwrap();
+        pub static ref NO_TRACK: OwnedObjectPath = "/org/mpris/MediaPlayer2/TrackList/NoTrack"
+            .try_into()
+            .unwrap();
     }
 }

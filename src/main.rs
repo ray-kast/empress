@@ -60,37 +60,6 @@ pub(crate) mod metadata {
     pub const POSITION: &str = "empress:position";
 }
 
-#[derive(Debug, Clone, Copy, strum::Display)]
-enum MethodId {
-    /// List the players currently tracked by the daemon
-    ListPlayers,
-    /// Skip one track forwards
-    Next,
-    /// Print information about the current track
-    NowPlaying,
-    /// Skip one track backwards
-    Previous,
-    /// Pause a currently-playing player
-    Pause,
-    /// Like pause if a player is playing, otherwise like play
-    PlayPause,
-    /// Stop a currently-playing player
-    Stop,
-    /// Play a currently-paused player
-    Play,
-    /// Seek to a relative position on a player
-    SeekRelative,
-    /// Seek to an absolute position on a player
-    SeekAbsolute,
-    /// Set a player's volume relative to its current volume
-    VolRelative,
-    /// Set a player's volume to an absolute value
-    VolAbsolute,
-    /// Move a player to the top of the priority list, optionally pausing all
-    /// other players and playing the selected one
-    SwitchCurrent,
-}
-
 #[derive(Parser)]
 enum Opts {
     /// Launch a D-Bus service abstracting MPRIS players
@@ -181,43 +150,12 @@ enum ClientCommand {
     },
 }
 
-impl ClientCommand {
-    pub fn id(&self) -> MethodId {
-        match self {
-            Self::ListPlayers => MethodId::ListPlayers,
-            Self::Next(..) => MethodId::Next,
-            Self::NowPlaying { .. } => MethodId::NowPlaying,
-            Self::Previous(..) => MethodId::Previous,
-            Self::Pause(..) => MethodId::Pause,
-            Self::PlayPause(..) => MethodId::PlayPause,
-            Self::Stop(..) => MethodId::Stop,
-            Self::Play(..) => MethodId::Play,
-            Self::Seek {
-                to: Offset::Relative(..),
-                ..
-            } => MethodId::SeekRelative,
-            Self::Seek {
-                to: Offset::Absolute(..),
-                ..
-            } => MethodId::SeekAbsolute,
-            Self::Volume {
-                vol: Offset::Relative(..),
-                ..
-            } => MethodId::VolRelative,
-            Self::Volume {
-                vol: Offset::Absolute(..),
-                ..
-            } => MethodId::VolAbsolute,
-            Self::SwitchCurrent { .. } => MethodId::SwitchCurrent,
-        }
-    }
-}
-
+/// Options for filtering the search set of players for the daemon
 #[derive(
-    Debug, Clone, Parser, zvariant::SerializeDict, zvariant::DeserializeDict, zvariant::Type,
+    Debug, Clone, Copy, Parser, zvariant::SerializeDict, zvariant::DeserializeDict, zvariant::Type,
 )]
 #[zvariant(signature = "dict")]
-struct PlayerOpts {}
+pub struct PlayerOpts {}
 
 #[derive(Debug, Clone, Copy)]
 enum Offset {
