@@ -46,6 +46,7 @@ lazy_static! {
 
 lazy_static! {
     static ref API_IDENT: String = format!("Empress{}", env!("CARGO_PKG_VERSION_MAJOR"));
+    // Interface name is non-negotiable, so don't add a .debug prefix
     static ref INTERFACE_NAME: OwnedInterfaceName = format!("net.ryan_s.{}.Daemon", *API_IDENT)
         .try_into()
         .unwrap();

@@ -276,8 +276,7 @@ impl Server {
     }
 }
 
-// TODO: unit test this
-#[zbus::dbus_interface(name = "net.ryan_s.Empress1.Daemon")]
+#[zbus::dbus_interface(name = "net.ryan_s.Empress2.Daemon")]
 impl Server {
     pub async fn list_players(
         &self,
@@ -566,5 +565,15 @@ impl Server {
             "Failed to switch the current player",
         )
         .await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use zbus::Interface;
+
+    #[test]
+    fn test_interface() {
+        assert_eq!(super::Server::name(), crate::INTERFACE_NAME.as_ref());
     }
 }
