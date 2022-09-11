@@ -11,6 +11,10 @@
 //! README](https://github.com/ray-kast/empress/blob/master/README.md) for more
 //! details.
 
+// TODO: implement PlayerOpts
+// TODO: add a refresh subcommand
+// TODO: finish the background scanner
+
 use std::{
     fmt,
     fmt::{Display, Formatter},

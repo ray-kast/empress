@@ -1,21 +1,15 @@
-use std::{
-    collections::HashMap,
-    future::Future,
-    mem,
-    sync::Arc,
-    time::{Duration, Instant},
-};
+use std::{collections::HashMap, future::Future, mem, sync::Arc, time::Instant};
 
 use anyhow::{anyhow, Context};
-use futures_util::{FutureExt, StreamExt, TryFutureExt};
-use log::{debug, trace, warn};
+use futures_util::{stream, FutureExt, StreamExt, TryFutureExt, TryStreamExt};
+use log::{debug, info, trace, warn};
 use tokio::{
     select,
     sync::{mpsc, RwLock},
 };
 use zbus::{
     fdo::{self, DBusProxy},
-    names::{OwnedBusName, OwnedInterfaceName},
+    names::{BusName, OwnedBusName, OwnedInterfaceName, UniqueName, WellKnownName},
     zvariant::{OwnedValue, Str, Value},
     Connection, Message,
 };
@@ -38,7 +32,7 @@ impl<'a> Drop for SignalMatcher<'a> {
             .unwrap()
             .block_on(async move {
                 match self.dbus.remove_match(&mem::take(&mut self.expr)).await {
-                    Err(zbus::fdo::Error::ZBus(zbus::Error::Io(e)))
+                    Err(fdo::Error::ZBus(zbus::Error::Io(e)))
                         if e.kind() == std::io::ErrorKind::BrokenPipe =>
                     {
                         warn!("Socket hung up before the signal listener was destroyed");
@@ -64,17 +58,24 @@ struct Shared {
 }
 
 impl Server {
-    fn filter_prop_changed(msg: &Message) -> bool {
+    fn filter_player_name(name: BusName) -> Option<WellKnownName> {
+        match name {
+            BusName::WellKnown(w) if w.starts_with(mpris::BUS_NAME.as_str()) => Some(w),
+            _ => None,
+        }
+    }
+
+    fn filter_prop_changed(msg: &Message) -> Option<(HashMap<String, Value>, Vec<String>)> {
         let iface = msg.interface();
         let memb = msg.member();
 
         if iface.map_or(true, |i| i != "org.freedesktop.DBus.Properties")
             || memb.map_or(true, |m| m != "PropertiesChanged")
         {
-            return false;
+            return None;
         }
 
-        let (iface, _props, _) =
+        let (iface, changed, invalidated) =
             match msg.body::<(OwnedInterfaceName, HashMap<String, Value>, Vec<String>)>() {
                 Ok(b) => b,
                 Err(e) => {
@@ -83,89 +84,186 @@ impl Server {
                         e
                     );
 
-                    return false;
+                    return None;
                 },
             };
 
         if iface != mpris::player::INTERFACE.as_ref() {
-            return false;
+            return None;
         }
 
-        true
+        Some((changed, invalidated))
     }
 
     pub async fn new(conn: Connection) -> Result<Self> {
-        let players = RwLock::new(PlayerMap::new());
-        let (stop_prop_changed, mut stop_rx) = mpsc::channel(1);
-        let dbus = DBusProxy::new(&conn)
-            .await
-            .context("Failed to create D-Bus proxy")?;
+        let (stop_prop_changed, stop_rx) = mpsc::channel(1);
 
         let this = Self {
-            shared: Arc::new(Shared { players }),
-            dbus: dbus.clone(),
+            shared: Arc::new(Shared {
+                players: RwLock::new(PlayerMap::new()),
+            }),
+            dbus: DBusProxy::new(&conn)
+                .await
+                .context("Failed to create D-Bus proxy")?,
             stop_prop_changed,
         };
 
+        this.clone()
+            .spawn_background_scanner(conn.clone(), stop_rx)
+            .await?;
+        this.scan(conn, false).await?;
+
+        Ok(this)
+    }
+
+    async fn spawn_background_scanner(
+        self,
+        conn: Connection,
+        mut stop_rx: mpsc::Receiver<()>,
+    ) -> Result<tokio::task::JoinHandle<()>> {
         let expr = concat!(
             "type='signal',",
             "interface='org.freedesktop.DBus.Properties',",
             "member='PropertiesChanged'"
         )
         .to_owned();
-        let mut msgs = zbus::MessageStream::from(conn.clone());
 
-        dbus.add_match(&expr)
+        self.dbus
+            .add_match(&expr)
             .await
             .context("Failed to add message match rule")?;
-        let matcher = SignalMatcher { dbus, expr };
+        let matcher = SignalMatcher {
+            dbus: self.dbus.clone(),
+            expr,
+        };
 
-        tokio::spawn({
-            let this = this.clone();
-            let conn = conn.clone();
+        let mut map = self
+            .get_player_name_map()
+            .await
+            .context("Failed to seed player name map")?;
 
-            async move {
-                'main: while let Some(msg) = select! {
-                    msg = msgs.next() => msg,
-                    _ = stop_rx.recv() => None,
-                } {
-                    // TODO: kill the server
-                    let msg = msg.context("Received error message").unwrap();
+        let mut msgs = zbus::MessageStream::from(conn.clone());
+        let mut owner_changed = self
+            .dbus
+            .receive_name_owner_changed()
+            .await
+            .context("Failed to create NameOwnerChanged listener")?;
 
-                    trace!("{:?}", msg);
-
-                    if !Self::filter_prop_changed(&msg) {
-                        continue;
-                    }
-
-                    debug!("Pending background scan...");
-
-                    loop {
-                        // TODO: unsure if draining messages is necessary anymore
-                        match select! {
-                            m = msgs.next() => m.map(|_| false),
-                            () = tokio::time::sleep(Duration::from_millis(200)) => Some(true),
-                            _ = stop_rx.recv() => None,
-                        } {
-                            Some(true) => break,
-                            Some(false) => (),
-                            None => break 'main,
-                        }
-                    }
-
-                    match this.scan(&conn, true).await {
-                        Ok(()) => (),
-                        Err(e) => warn!("Background scan failed: {:?}", e),
-                    }
-                }
-
-                mem::drop(matcher);
+        Ok(tokio::spawn(async move {
+            enum Event {
+                Message(Result<Arc<Message>, zbus::Error>),
+                OwnerChanged(fdo::NameOwnerChanged),
             }
-        });
 
-        this.scan(conn, false).await?;
+            while let Some(evt) = select! {
+                msg = msgs.next() => msg.map(Event::Message),
+                chng = owner_changed.next() => chng.map(Event::OwnerChanged),
+                _ = stop_rx.recv() => None,
+            } {
+                match evt {
+                    Event::Message(Ok(m)) => {
+                        if let Some((changed, invalidated)) = Self::filter_prop_changed(&m) {
+                            let header = m.header().context("Invalid message header");
+                            let (sender,) = match header.and_then(|h| {
+                                let sender = h
+                                    .sender()
+                                    .context("Invalid message sender")?
+                                    .ok_or_else(|| anyhow!("Message had no sender"))?;
+                                let sender = map
+                                    .get(sender)
+                                    .ok_or_else(|| anyhow!("Unexpected bus name"))?;
 
-        Ok(this)
+                                Ok((sender,))
+                            }) {
+                                Ok(h) => h,
+                                Err(e) => {
+                                    warn!("Failed to parse incoming message: {:?}", e);
+
+                                    continue;
+                                },
+                            };
+
+                            if !changed.is_empty() {
+                                debug!(
+                                    "properties on {:?} changed: {:?}",
+                                    sender.as_str(),
+                                    changed
+                                );
+                            }
+
+                            if !invalidated.is_empty() {
+                                debug!(
+                                    "properties on {:?} invalidated: {:?}",
+                                    sender.as_str(),
+                                    invalidated
+                                );
+                            }
+                        }
+                    },
+                    Event::Message(Err(e)) => {
+                        warn!("Received a D-Bus error: {:?}", anyhow::Error::from(e));
+                    },
+                    Event::OwnerChanged(chng) => match chng.args() {
+                        Ok(args) => {
+                            if let Some(name) = Self::filter_player_name(args.name) {
+                                if let Some(old) = Option::<UniqueName>::from(args.old_owner) {
+                                    // TODO: unsure how to avoid this to_owned()
+                                    map.remove(&old.to_owned());
+
+                                    debug!("{:?} lost {:?}", old.as_str(), name.as_str());
+                                }
+
+                                if let Some(new) = Option::<UniqueName>::from(args.new_owner) {
+                                    map.insert(new.to_owned(), name.to_owned());
+
+                                    debug!("{:?} acquired {:?}", new.as_str(), name.as_str());
+                                }
+                            }
+                        },
+                        Err(e) => warn!(
+                            "Received an error for NameOwnerChanged: {:?}",
+                            anyhow::Error::from(e)
+                        ),
+                    },
+                }
+            }
+
+            // TODO: consider panicking if there are extant references to the
+            //       server at this point
+            info!("Background scanner terminated");
+
+            mem::drop(matcher);
+        }))
+    }
+
+    async fn get_player_names(&self) -> Result<impl Iterator<Item = WellKnownName<'static>>> {
+        Ok(self
+            .dbus
+            .list_names()
+            .await
+            .context("Failed to list bus names")?
+            .into_iter()
+            .filter_map(|n| Self::filter_player_name(n.into_inner())))
+    }
+
+    async fn get_player_name_map(
+        &self,
+    ) -> Result<HashMap<UniqueName<'static>, WellKnownName<'static>>> {
+        self.get_player_names()
+            .await?
+            .map(|n| async {
+                let uniq = self
+                    .dbus
+                    .get_name_owner(BusName::WellKnown(n.as_ref()))
+                    .await?;
+
+                trace!("{:?} owns {:?}", uniq.as_str(), n.as_str());
+
+                Ok((uniq.into_inner(), n))
+            })
+            .collect::<stream::FuturesOrdered<_>>()
+            .try_collect()
+            .await
     }
 
     async fn scan(&self, conn: impl std::borrow::Borrow<Connection>, force: bool) -> Result {
@@ -177,11 +275,6 @@ impl Server {
         }
 
         let now = Instant::now();
-        let names = self
-            .dbus
-            .list_names()
-            .await
-            .context("Failed to call ListNames")?;
 
         self.shared
             .players
@@ -191,12 +284,7 @@ impl Server {
                 conn,
                 now,
                 force,
-                names
-                    .into_iter()
-                    .filter(|n| n.starts_with(mpris::BUS_NAME.as_str()))
-                    .map(TryInto::try_into)
-                    .collect::<Result<_, _>>()
-                    .context("Failed to parse player list")?,
+                self.get_player_names().await?.map(Into::into).collect(),
             )
             .await;
 
