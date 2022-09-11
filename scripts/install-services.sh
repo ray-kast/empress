@@ -52,36 +52,63 @@ fi
 
 cd "$(dirname "$0")/.."
 
+version="$(cargo read-manifest --manifest-path Cargo.toml | jq -r \
+  '.version | capture("^(?<major>\\d+)\\.(?<minor>\\d+)\\.(?<rev>\\d+)(?<extra>.*)$")')"
+
+for part in major minor rev extra; do
+  typeset ver_$part="$(jq -r .$part <<<"$version")"
+done
+
+service=net.ryan_s.Empress$ver_major
 systemd_file=empress.service
-dbus_file=net.ryan_s.Empress1.service
+dbus_file=$service.service
+
+inval=''
+
+if ! grep -Fqe"BusName=$service" "etc/$systemd_file.in"; then
+  echo "Invalid systemd service definition!" >&2
+
+  inval=t
+fi
+
+if ! grep -Fqe"Name=$service" "etc/$dbus_file.in"; then
+  echo "Invalid D-Bus service definition!" >&2
+
+  inval=t
+fi
+
+[[ -z "$inval" ]] || exit -1
 
 if [[ -z "$remove" ]]; then
   sed -e "s:/path/to/empress:$1:" "etc/$systemd_file.in" >"target/$systemd_file"
   sed -e "s:/path/to/empress:$1:" "etc/$dbus_file.in" >"target/$dbus_file"
 fi
 
-[[ -n "$noop" ]] && exit 0
-
 systemd_dir="/usr/lib/systemd/user/"
 dbus_dir="/usr/share/dbus-1/services/"
 
 if [[ -n "$loc" ]]; then
-  base="$XDG_DATA_HOME"
-
-  [[ -n "$base" ]] || base="$HOME"
+  base="${XDG_DATA_HOME:-$HOME}"
 
   systemd_dir="$base/.local/share/systemd/user"
   dbus_dir="$base/.local/share/dbus-1/services"
 fi
 
-mkdir -p "$systemd_dir"
-mkdir -p "$dbus_dir"
+if [[ -n "$noop" ]]; then
+  echo "systemd install dir: $systemd_dir" >&2
+  echo "D-Bus install dir: $dbus_dir" >&2
+  exit 0
+fi
+
+mkdir -vp "$systemd_dir"
+mkdir -vp "$dbus_dir"
 
 fail=0
 
 if [[ -z "$remove" ]]; then
   (
-    install -vDm644 "target/$systemd_file" -t "$systemd_dir" && \
+    set -e
+    install -vDm644 "target/$systemd_file" -t "$systemd_dir"
     install -vDm644 "target/$dbus_file" -t "$dbus_dir"
   ) || fail=$?
 else
