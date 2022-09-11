@@ -1,18 +1,13 @@
 use std::{
     collections::{BTreeSet, HashMap, HashSet},
-    future::Future,
     time::Instant,
 };
 
-use futures_util::{stream::FuturesUnordered, StreamExt};
 use log::{debug, trace, warn};
-use tokio::sync::RwLock;
-use zbus::names::BusName;
+use zbus::{names::BusName, Connection};
 
 use super::{mpris::player::PlaybackStatus, Player};
-use crate::Result;
 
-// TODO: can this be zero-copy?
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord)]
 struct PlayerKey {
     status: PlaybackStatus,
@@ -41,83 +36,49 @@ pub(super) struct PlayerMap {
 }
 
 impl PlayerMap {
-    pub async fn inform<
-        P: Fn(&BusName<'static>) -> PR + Copy,
-        PR: Future<Output = Result<Player>>,
-    >(
-        this: &RwLock<Self>,
+    pub async fn inform(
+        &mut self,
+        conn: &Connection,
+        now: Instant,
         try_patch: bool,
         names: HashSet<BusName<'static>>,
-        player: P,
     ) {
-        use std::collections::hash_map::Entry;
+        let key_set: HashSet<_> = self.players.keys().cloned().collect();
 
-        let key_set = this.read().await.players.keys().cloned().collect();
+        for name in key_set.difference(&names) {
+            trace!("Removing player from map: {:?}", name);
+
+            assert!(self.remove(name).is_some());
+        }
+
+        for name in names.difference(&key_set) {
+            let player = match Player::new(now, name, conn).await {
+                Ok(p) => p,
+                Err(e) => {
+                    warn!("Constructing player failed: {:?}", e);
+                    continue;
+                },
+            };
+
+            trace!("Adding new player to map: {:?}", player);
+
+            assert!(self.put(player));
+        }
 
         if try_patch {
-            // TODO: creating a new player should be avoided given the zbus
-            //       proxies contain non-trivial caching logic
-            let vec: Vec<_> = names
-                .intersection(&key_set)
-                .map(|n| async move { (n, player(n).await) })
-                .collect::<FuturesUnordered<_>>()
-                .collect()
-                .await;
+            for name in names.intersection(&key_set) {
+                let mut player = self.players.remove(name).unwrap();
 
-            let mut this = this.write().await;
-
-            for (name, res) in vec {
-                let player = match res {
-                    Ok(p) => p,
+                match player.refresh().await {
+                    Ok(()) => (),
                     Err(e) => {
-                        warn!("Constructing player failed: {:?}", e);
+                        warn!("Refreshing player failed: {:?}", e);
                         continue;
                     },
-                };
-                let old_player = this.players.get(name).unwrap();
-
-                if player.status() != old_player.status()
-                    || player.last_update() < old_player.last_update()
-                {
-                    this.put(player);
-                } else {
-                    trace!("Skipping map update for player: {:?}", player);
                 }
-            }
 
-            for name in key_set.difference(&names) {
-                assert!(this.remove(name).is_some());
-            }
-        } else {
-            let PlayerMap {
-                ref mut players,
-                ref mut keys,
-            } = *this.write().await;
-
-            for name in names.symmetric_difference(&key_set) {
-                match players.entry(name.clone()) {
-                    Entry::Vacant(v) => {
-                        let player = match player(v.key()).await {
-                            Ok(p) => p,
-                            Err(e) => {
-                                warn!("Constructing player failed: {:?}", e);
-                                continue;
-                            },
-                        };
-
-                        trace!("Quick-adding new player to map: {:?}", player);
-
-                        keys.insert(player.get_key());
-                        v.insert(player);
-                    },
-                    Entry::Occupied(o) => {
-                        let (bus, player) = o.remove_entry();
-
-                        trace!("Quick-removing player from map: {:?}", bus);
-
-                        assert!(keys.remove(&player.get_key()));
-                    },
-                }
+                trace!("Updating player in map: {:?}", player);
+                assert!(!self.put(player));
             }
         }
     }

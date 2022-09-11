@@ -173,18 +173,22 @@ impl Server {
             .await
             .context("Failed to call ListNames")?;
 
-        PlayerMap::inform(
-            &self.shared.players,
-            force,
-            names
-                .into_iter()
-                .filter(|n| n.starts_with(mpris::BUS_NAME.as_str()))
-                .map(TryInto::try_into)
-                .collect::<Result<_, _>>()
-                .context("Failed to parse player list")?,
-            |n| Player::new(now, n.clone(), conn),
-        )
-        .await;
+        self.shared
+            .players
+            .write()
+            .await
+            .inform(
+                conn,
+                now,
+                force,
+                names
+                    .into_iter()
+                    .filter(|n| n.starts_with(mpris::BUS_NAME.as_str()))
+                    .map(TryInto::try_into)
+                    .collect::<Result<_, _>>()
+                    .context("Failed to parse player list")?,
+            )
+            .await;
 
         trace!("Scan completed.");
 

@@ -46,9 +46,15 @@ impl Player {
                 .context("Failed to build player proxy")?,
         };
 
-        ret.status = ret.playback_status().await?;
+        ret.refresh().await?;
 
         Ok(ret)
+    }
+
+    pub async fn refresh(&mut self) -> Result<()> {
+        self.status = self.playback_status().await?;
+
+        Ok(())
     }
 
     //////// Accessors ////////
