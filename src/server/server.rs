@@ -36,7 +36,17 @@ impl<'a> Drop for SignalMatcher<'a> {
         tokio::runtime::Builder::new_current_thread()
             .build()
             .unwrap()
-            .block_on(async move { self.dbus.remove_match(&mem::take(&mut self.expr)).await })
+            .block_on(async move {
+                match self.dbus.remove_match(&mem::take(&mut self.expr)).await {
+                    Err(zbus::fdo::Error::ZBus(zbus::Error::Io(e)))
+                        if e.kind() == std::io::ErrorKind::BrokenPipe =>
+                    {
+                        warn!("Socket hung up before the signal listener was destroyed");
+                        Ok(())
+                    },
+                    r => r,
+                }
+            })
             .expect("Removing signal listener failed");
     }
 }
