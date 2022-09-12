@@ -13,7 +13,9 @@
 
 // TODO: implement PlayerOpts
 // TODO: add a refresh subcommand
+//        - add warnings for detected sync errors during refresh
 // TODO: finish the background scanner
+// TODO: convert now-playing to a property
 
 use std::{
     fmt,

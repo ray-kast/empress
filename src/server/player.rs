@@ -2,7 +2,7 @@ use std::{collections::HashMap, fmt::Debug, time::Instant};
 
 use anyhow::{anyhow, Context};
 use zbus::{
-    names::BusName,
+    names::{BusName, WellKnownName},
     zvariant::{ObjectPath, OwnedValue},
     Connection,
 };
@@ -63,6 +63,18 @@ impl Player {
     pub fn status(&self) -> PlaybackStatus { self.status }
 
     #[inline]
+    pub fn update_status(&mut self, status: PlaybackStatus) -> Option<Instant> {
+        if self.status == status {
+            return None;
+        }
+
+        let now = Instant::now();
+        self.status = status;
+        self.last_update = now;
+        Some(now)
+    }
+
+    #[inline]
     pub fn last_update(&self) -> Instant { self.last_update }
 
     #[inline]
@@ -73,9 +85,12 @@ impl Player {
     }
 
     #[inline]
-    pub fn bus(&self) -> &BusName {
+    pub fn bus(&self) -> &WellKnownName {
         debug_assert_eq!(self.mp2.destination(), self.player.destination());
-        self.player.destination()
+        match self.player.destination() {
+            BusName::Unique(u) => unreachable!("MPRIS bus had unique name {:?}", u.as_str()),
+            BusName::WellKnown(w) => w,
+        }
     }
 
     //////// Methods under MediaPlayer2.Player ////////

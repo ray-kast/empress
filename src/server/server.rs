@@ -9,7 +9,7 @@ use tokio::{
 };
 use zbus::{
     fdo::{self, DBusProxy},
-    names::{BusName, OwnedBusName, OwnedInterfaceName, UniqueName, WellKnownName},
+    names::{BusName, OwnedInterfaceName, UniqueName, WellKnownName},
     zvariant::{OwnedValue, Str, Value},
     Connection, Message,
 };
@@ -35,6 +35,9 @@ impl<'a> Drop for SignalMatcher<'a> {
                     Err(fdo::Error::ZBus(zbus::Error::Io(e)))
                         if e.kind() == std::io::ErrorKind::BrokenPipe =>
                     {
+                        // TODO: this is most likely because of the construction
+                        //       of a new runtime - need to look into marshaling
+                        //       this block onto an existing runtime
                         warn!("Socket hung up before the signal listener was destroyed");
                         Ok(())
                     },
@@ -121,28 +124,23 @@ impl Server {
         conn: Connection,
         mut stop_rx: mpsc::Receiver<()>,
     ) -> Result<tokio::task::JoinHandle<()>> {
+        // TODO: can this be narrowed down further?
         let expr = concat!(
             "type='signal',",
             "interface='org.freedesktop.DBus.Properties',",
             "member='PropertiesChanged'"
-        )
-        .to_owned();
-
+        );
         self.dbus
-            .add_match(&expr)
+            .add_match(expr)
             .await
             .context("Failed to add message match rule")?;
+
         let matcher = SignalMatcher {
             dbus: self.dbus.clone(),
-            expr,
+            expr: expr.to_owned(),
         };
-
-        let mut map = self
-            .get_player_name_map()
-            .await
-            .context("Failed to seed player name map")?;
-
         let mut msgs = zbus::MessageStream::from(conn.clone());
+
         let mut owner_changed = self
             .dbus
             .receive_name_owner_changed()
@@ -162,70 +160,52 @@ impl Server {
             } {
                 match evt {
                     Event::Message(Ok(m)) => {
-                        if let Some((changed, invalidated)) = Self::filter_prop_changed(&m) {
-                            let header = m.header().context("Invalid message header");
-                            let (sender,) = match header.and_then(|h| {
-                                let sender = h
-                                    .sender()
-                                    .context("Invalid message sender")?
-                                    .ok_or_else(|| anyhow!("Message had no sender"))?;
-                                let sender = map
-                                    .get(sender)
-                                    .ok_or_else(|| anyhow!("Unexpected bus name"))?;
-
-                                Ok((sender,))
-                            }) {
-                                Ok(h) => h,
+                        if let Some(evt) = Self::filter_prop_changed(&m) {
+                            match self.handle_property_changed(&m, evt).await {
+                                Ok(true) => (),
+                                Ok(false) => continue,
                                 Err(e) => {
-                                    warn!("Failed to parse incoming message: {:?}", e);
-
+                                    warn!("Failed to process PropertyChanged signal: {:?}", e);
                                     continue;
                                 },
-                            };
-
-                            if !changed.is_empty() {
-                                debug!(
-                                    "properties on {:?} changed: {:?}",
-                                    sender.as_str(),
-                                    changed
-                                );
                             }
-
-                            if !invalidated.is_empty() {
-                                debug!(
-                                    "properties on {:?} invalidated: {:?}",
-                                    sender.as_str(),
-                                    invalidated
-                                );
-                            }
+                        } else {
+                            continue;
                         }
                     },
                     Event::Message(Err(e)) => {
                         warn!("Received a D-Bus error: {:?}", anyhow::Error::from(e));
+                        continue;
                     },
-                    Event::OwnerChanged(chng) => match chng.args() {
-                        Ok(args) => {
-                            if let Some(name) = Self::filter_player_name(args.name) {
-                                if let Some(old) = Option::<UniqueName>::from(args.old_owner) {
-                                    // TODO: unsure how to avoid this to_owned()
-                                    map.remove(&old.to_owned());
-
-                                    debug!("{:?} lost {:?}", old.as_str(), name.as_str());
-                                }
-
-                                if let Some(new) = Option::<UniqueName>::from(args.new_owner) {
-                                    map.insert(new.to_owned(), name.to_owned());
-
-                                    debug!("{:?} acquired {:?}", new.as_str(), name.as_str());
-                                }
-                            }
-                        },
-                        Err(e) => warn!(
-                            "Received an error for NameOwnerChanged: {:?}",
-                            anyhow::Error::from(e)
-                        ),
+                    Event::OwnerChanged(chng) => {
+                        match self.handle_name_owner_changed(&conn, chng).await {
+                            Ok(true) => (),
+                            Ok(false) => continue,
+                            Err(e) => {
+                                warn!("Failed to process NameOwnerChanged signal: {:?}", e);
+                                continue;
+                            },
+                        }
                     },
                 }
+
+                debug!("Player list:{}", {
+                    let mut s = String::new();
+
+                    for player in self.shared.players.read().await.iter_all() {
+                        use std::fmt::Write;
+                        write!(
+                            s,
+                            "\n - {:?} ({:?} at {:?})",
+                            player.bus().as_str(),
+                            player.status(),
+                            player.last_update(),
+                        )
+                        .unwrap();
+                    }
+
+                    s
+                });
             }
 
             // TODO: consider panicking if there are extant references to the
@@ -234,6 +214,146 @@ impl Server {
 
             mem::drop(matcher);
         }))
+    }
+
+    #[inline]
+    async fn handle_property_changed(
+        &self,
+        msg: &Message,
+        (changed, invalidated): (HashMap<String, Value<'_>>, Vec<String>),
+    ) -> Result<bool> {
+        let header = msg.header().context("Invalid message header")?;
+
+        let sender = header
+            .sender()
+            .context("Invalid message sender")?
+            .ok_or_else(|| anyhow!("Message had no sender"))?;
+
+        let players = self.shared.players.read().await;
+
+        // TODO: unsure how to avoid this to_owned()
+        let sender = players
+            .resolve(&sender.to_owned())
+            .ok_or_else(|| anyhow!("Unexpected bus name"))?
+            .to_owned();
+
+        mem::drop(players);
+
+        let mut ret = false;
+
+        if !changed.is_empty() {
+            trace!("properties on {:?} changed: {:?}", sender.as_str(), changed);
+
+            for (name, val) in changed {
+                // TODO: find a more elegant way to do this
+                #[allow(clippy::single_match)]
+                match &*name {
+                    "PlaybackStatus" => {
+                        if let Some((mut players, mut player, val)) = async {
+                            let mut players = self.shared.players.write().await;
+                            let player = players.remove(&sender)?;
+
+                            let val: PlaybackStatus = val
+                                .downcast_ref::<str>()?
+                                .parse()
+                                .map_err(|e| warn!("Failed to parse playback status: {}", e))
+                                .ok()?;
+
+                            Some((players, player, val))
+                        }
+                        .await
+                        {
+                            player.update_status(val);
+                            players.put(player);
+
+                            ret = true;
+                        }
+                    },
+                    _ => (),
+                }
+            }
+        }
+
+        if !invalidated.is_empty() {
+            trace!(
+                "properties on {:?} invalidated: {:?}",
+                sender.as_str(),
+                invalidated
+            );
+
+            for name in invalidated {
+                // TODO: find a more elegant way to do this
+                #[allow(clippy::single_match)]
+                match &*name {
+                    "PlaybackStatus" => {
+                        // TODO: there are several occurrences of the remove-
+                        //       update-put pattern in the code, these could be
+                        //       simplified to a single "mutate" method
+                        if let Some((mut players, mut player, status)) = async {
+                            let mut players = self.shared.players.write().await;
+                            let player = players.remove(&sender)?;
+
+                            let status = player
+                                .playback_status()
+                                .await
+                                .map_err(|e| warn!("Failed to get player status: {}", e))
+                                .ok()?;
+
+                            Some((players, player, status))
+                        }
+                        .await
+                        {
+                            player.update_status(status);
+                            players.put(player);
+
+                            ret = true;
+                        }
+                    },
+                    _ => (),
+                }
+            }
+        }
+
+        Ok(ret)
+    }
+
+    #[inline]
+    async fn handle_name_owner_changed(
+        &self,
+        conn: &Connection,
+        chng: fdo::NameOwnerChanged,
+    ) -> Result<bool> {
+        let args = chng
+            .args()
+            .context("Failed to parse NameOwnerChanged arguments")?;
+
+        let name = match Self::filter_player_name(args.name) {
+            Some(n) => n,
+            None => return Ok(false),
+        };
+
+        if args.old_owner.is_none() && args.new_owner.is_none() {
+            return Ok(false);
+        }
+
+        let mut players = self.shared.players.write().await;
+
+        if let Some(old) = Option::<UniqueName>::from(args.old_owner) {
+            // TODO: unsure how to avoid this to_owned()
+            players.remove_owner(&old.to_owned());
+
+            trace!("{:?} lost {:?}", old.as_str(), name.as_str());
+        }
+
+        if let Some(new) = Option::<UniqueName>::from(args.new_owner) {
+            players
+                .put_owner(conn, Instant::now(), new.to_owned(), name.to_owned())
+                .await?;
+
+            trace!("{:?} acquired {:?}", new.as_str(), name.as_str());
+        }
+
+        Ok(true)
     }
 
     async fn get_player_names(&self) -> Result<impl Iterator<Item = WellKnownName<'static>>> {
@@ -280,12 +400,7 @@ impl Server {
             .players
             .write()
             .await
-            .inform(
-                conn,
-                now,
-                force,
-                self.get_player_names().await?.map(Into::into).collect(),
-            )
+            .inform(conn, now, force, self.get_player_name_map().await?)
             .await;
 
         trace!("Scan completed.");
@@ -366,13 +481,14 @@ impl Server {
         E: std::fmt::Display + Sync,
     >(
         &self,
-        conn: &Connection,
+        _conn: &Connection,
         f: F,
         msg: E,
     ) -> ZResult<T> {
-        self.scan(conn, false)
-            .await
-            .map_err(|e| method_err(e, "Failed to scan for players"))?;
+        // TODO: clean this and the unused parameter up
+        // self.scan(conn, false)
+        //     .await
+        //     .map_err(|e| method_err(e, "Failed to scan for players"))?;
 
         f().await.map_err(|e| method_err(e, msg))
     }
@@ -621,8 +737,7 @@ impl Server {
         self.handle_method(
             conn,
             || async {
-                let bus = format!("{}.{}", *mpris::BUS_NAME, to)
-                    .try_into()
+                let bus = WellKnownName::try_from(format!("{}.{}", *mpris::BUS_NAME, to))
                     .map_err(|s| anyhow!("{:?} is not a valid bus name", s))?;
 
                 let curr = match self.shared.players.write().await.remove(&bus) {
@@ -638,12 +753,12 @@ impl Server {
                         if player.playback_status().await? == PlaybackStatus::Playing
                             && player.can_pause().await?
                         {
-                            put.push(OwnedBusName::from(player.bus().to_owned()));
+                            put.push(player.bus().to_owned());
                         }
                     }
 
                     for bus in put {
-                        let player = players.remove(&bus.into()).unwrap();
+                        let player = players.remove(&bus).unwrap();
                         let player = player
                             .pause()
                             .await
