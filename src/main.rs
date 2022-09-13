@@ -18,6 +18,7 @@
 // TODO: convert now-playing to a property
 
 use std::{
+    collections::HashSet,
     fmt,
     fmt::{Display, Formatter},
 };
@@ -26,6 +27,7 @@ use anyhow::{anyhow, Context, Error};
 use clap::Parser;
 use lazy_static::lazy_static;
 use log::{error, LevelFilter};
+use server::mpris::player::PlaybackStatus;
 use tokio::runtime::Builder as RtBuilder;
 use zbus::{
     names::{OwnedInterfaceName, OwnedWellKnownName},
@@ -41,16 +43,16 @@ type Result<T = (), E = Error> = std::result::Result<T, E>;
 #[cfg(debug_assertions)]
 lazy_static! {
     static ref NAME_PREFIX: String = format!("net.ryan_s.debug.{}", *API_IDENT);
-    static ref PATH_PREFIX: String = format!("/net/ryan_s/debug/{}", *API_IDENT);
 }
 
 #[cfg(not(debug_assertions))]
 lazy_static! {
     static ref NAME_PREFIX: String = format!("net.ryan_s.{}", *API_IDENT);
-    static ref PATH_PREFIX: String = format!("/net/ryan_s/{}", *API_IDENT);
 }
 
 lazy_static! {
+    static ref PATH_PREFIX: String = format!("/net/ryan_s/{}", *API_IDENT);
+
     static ref API_IDENT: String = format!("Empress{}", env!("CARGO_PKG_VERSION_MAJOR"));
     // Interface name is non-negotiable, so don't add a .debug prefix
     static ref INTERFACE_NAME: OwnedInterfaceName = format!("net.ryan_s.{}.Daemon", *API_IDENT)
@@ -159,10 +161,13 @@ enum ClientCommand {
 
 /// Options for filtering the search set of players for the daemon
 #[derive(
-    Debug, Clone, Copy, Parser, zvariant::SerializeDict, zvariant::DeserializeDict, zvariant::Type,
+    Debug, Clone, Parser, zvariant::SerializeDict, zvariant::DeserializeDict, zvariant::Type,
 )]
 #[zvariant(signature = "dict")]
-pub struct PlayerOpts {}
+pub struct PlayerOpts {
+    #[clap(use_value_delimiter(true))]
+    state: Vec<PlaybackStatus>,
+}
 
 #[derive(Debug, Clone, Copy)]
 enum Offset {

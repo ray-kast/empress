@@ -187,7 +187,6 @@ impl Player {
             .playback_status()
             .await
             .context("Proxy property get for PlaybackStatus failed")
-            .and_then(|s| s.parse().context("Invalid playback status"))
     }
 
     pub async fn metadata(&self) -> Result<HashMap<String, OwnedValue>> {

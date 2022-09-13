@@ -23,7 +23,7 @@ struct NowPlayingPlayer {
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct NowPlayingResult {
-    status: String,
+    status: PlaybackStatus,
     player: NowPlayingPlayer,
     title: Option<String>,
     artist: Option<Vec<String>>,
@@ -57,8 +57,6 @@ impl TryFrom<OwnedNowPlayingResponse> for NowPlayingResult {
         let position = map
             .remove(crate::metadata::POSITION)
             .and_then(|v| v.try_into().ok());
-
-        let _: PlaybackStatus = status.parse()?;
 
         Ok(Self {
             status,

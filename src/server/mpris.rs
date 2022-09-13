@@ -35,7 +35,7 @@ pub trait Player {
     fn set_position(&self, track: ObjectPath<'_>, pos: i64) -> fdo::Result<()>;
 
     #[dbus_proxy(property)]
-    fn playback_status(&self) -> fdo::Result<String>;
+    fn playback_status(&self) -> fdo::Result<player::PlaybackStatus>;
     #[dbus_proxy(property)]
     fn metadata(&self) -> fdo::Result<HashMap<String, OwnedValue>>;
     #[dbus_proxy(property)]
@@ -59,7 +59,10 @@ pub trait Player {
 }
 
 pub mod player {
-    use zbus::names::OwnedInterfaceName;
+    use zbus::{
+        names::OwnedInterfaceName,
+        zvariant::{Error as VariantError, OwnedValue},
+    };
 
     use super::{lazy_static, NAME_PREFIX};
 
@@ -69,12 +72,47 @@ pub mod player {
     }
 
     #[derive(
-        Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, strum::EnumString, strum::Display,
+        Debug,
+        Clone,
+        Copy,
+        PartialEq,
+        Eq,
+        PartialOrd,
+        Ord,
+        strum::EnumString,
+        strum::Display,
+        serde::Serialize,
+        serde::Deserialize,
+        zbus::zvariant::Type,
     )]
+    #[serde(into = "String", try_from = "String")]
+    #[zvariant(signature = "s")]
     pub enum PlaybackStatus {
         Playing,
         Paused,
         Stopped,
+    }
+
+    impl From<PlaybackStatus> for String {
+        fn from(s: PlaybackStatus) -> Self { s.to_string() }
+    }
+
+    impl TryFrom<String> for PlaybackStatus {
+        type Error = <Self as std::str::FromStr>::Err;
+
+        fn try_from(value: String) -> Result<Self, Self::Error> { value.parse() }
+    }
+
+    impl TryFrom<OwnedValue> for PlaybackStatus {
+        type Error = VariantError;
+
+        fn try_from(value: OwnedValue) -> Result<Self, Self::Error> {
+            value
+                .downcast_ref::<str>()
+                .ok_or(VariantError::IncorrectType)?
+                .parse()
+                .map_err(|e: strum::ParseError| VariantError::Message(e.to_string()))
+        }
     }
 }
 

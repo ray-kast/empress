@@ -13,16 +13,21 @@ use zbus::{
     ConnectionBuilder,
 };
 
+use self::mpris::player::PlaybackStatus;
 use crate::{Result, SERVER_NAME, SERVER_PATH};
 
 pub mod mpris;
 mod player;
 mod player_map;
+// TODO: deal with this
 #[allow(clippy::module_inception)] // I'm aware, but the struct is called Server
 mod server;
 
-// pub type NowPlayingResponse<'a> = (HashMap<String, Value<'a>>, String);
-pub type OwnedNowPlayingResponse = (HashMap<String, OwnedValue>, String);
+// TODO: incorporate PlaybackStatus into the hash map
+// pub type NowPlayingResponse<'a> = (HashMap<String, Value<'a>>, PlaybackStatus);
+pub type OwnedNowPlayingResponse = (HashMap<String, OwnedValue>, PlaybackStatus);
+
+pub type PlayerList = Vec<(String, PlaybackStatus)>;
 
 pub(self) use player::Player;
 pub(self) use player_map::PlayerMap;

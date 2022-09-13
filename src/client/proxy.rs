@@ -1,6 +1,9 @@
 use zbus::fdo;
 
-use crate::{server::OwnedNowPlayingResponse, PlayerOpts};
+use crate::{
+    server::{OwnedNowPlayingResponse, PlayerList},
+    PlayerOpts,
+};
 
 #[zbus::dbus_proxy(
     interface = "net.ryan_s.Empress2.Daemon",
@@ -8,7 +11,7 @@ use crate::{server::OwnedNowPlayingResponse, PlayerOpts};
     default_path = "/net/ryan_s/Empress2/Daemon"
 )]
 trait Empress {
-    fn list_players(&self) -> fdo::Result<Vec<(String, String)>>;
+    fn list_players(&self) -> fdo::Result<PlayerList>;
 
     fn now_playing(&self, opts: &PlayerOpts) -> fdo::Result<OwnedNowPlayingResponse>;
 

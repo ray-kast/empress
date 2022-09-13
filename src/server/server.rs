@@ -15,8 +15,8 @@ use zbus::{
 };
 
 use super::{
-    method_err, mpris, mpris::player::PlaybackStatus, OwnedNowPlayingResponse, Player, PlayerMap,
-    ZResult,
+    method_err, mpris, mpris::player::PlaybackStatus, OwnedNowPlayingResponse, Player, PlayerList,
+    PlayerMap, ZResult,
 };
 use crate::{Offset, PlayerOpts, Result};
 
@@ -499,7 +499,7 @@ impl Server {
     pub async fn list_players(
         &self,
         #[zbus(connection)] conn: &Connection,
-    ) -> fdo::Result<Vec<(String, String)>> {
+    ) -> fdo::Result<PlayerList> {
         self.handle_method(
             conn,
             || async {
@@ -513,7 +513,7 @@ impl Server {
                         p.bus()
                             .strip_prefix(mpris::BUS_NAME.as_str())
                             .and_then(|s| s.strip_prefix('.'))
-                            .map(|s| (s.into(), p.status().to_string()))
+                            .map(|s| (s.into(), p.status()))
                     })
                     .collect())
             },
@@ -525,7 +525,7 @@ impl Server {
     pub async fn now_playing(
         &self,
         #[zbus(connection)] conn: &Connection,
-        PlayerOpts {}: PlayerOpts,
+        opts: PlayerOpts,
     ) -> fdo::Result<OwnedNowPlayingResponse> {
         self.handle_method(
             conn,
@@ -574,7 +574,7 @@ impl Server {
                     let (map, status) =
                         ok.unwrap_or_else(|| (HashMap::new(), PlaybackStatus::Stopped));
 
-                    (map, status.to_string())
+                    (map, status)
                 })
             },
             "Failed to get current track info",
@@ -585,7 +585,7 @@ impl Server {
     pub async fn next(
         &self,
         #[zbus(connection)] conn: &Connection,
-        PlayerOpts {}: PlayerOpts,
+        opts: PlayerOpts,
     ) -> fdo::Result<()> {
         self.handle_method(
             conn,
@@ -598,7 +598,7 @@ impl Server {
     pub async fn prev(
         &self,
         #[zbus(connection)] conn: &Connection,
-        PlayerOpts {}: PlayerOpts,
+        opts: PlayerOpts,
     ) -> fdo::Result<()> {
         self.handle_method(
             conn,
@@ -611,7 +611,7 @@ impl Server {
     pub async fn pause(
         &self,
         #[zbus(connection)] conn: &Connection,
-        PlayerOpts {}: PlayerOpts,
+        opts: PlayerOpts,
     ) -> fdo::Result<()> {
         self.handle_method(
             conn,
@@ -624,7 +624,7 @@ impl Server {
     pub async fn play_pause(
         &self,
         #[zbus(connection)] conn: &Connection,
-        PlayerOpts {}: PlayerOpts,
+        opts: PlayerOpts,
     ) -> fdo::Result<()> {
         self.handle_method(
             conn,
@@ -637,7 +637,7 @@ impl Server {
     pub async fn stop(
         &self,
         #[zbus(connection)] conn: &Connection,
-        PlayerOpts {}: PlayerOpts,
+        opts: PlayerOpts,
     ) -> fdo::Result<()> {
         self.handle_method(
             conn,
@@ -650,7 +650,7 @@ impl Server {
     pub async fn play(
         &self,
         #[zbus(connection)] conn: &Connection,
-        PlayerOpts {}: PlayerOpts,
+        opts: PlayerOpts,
     ) -> fdo::Result<()> {
         self.handle_method(
             conn,
@@ -663,7 +663,7 @@ impl Server {
     pub async fn seek_relative(
         &self,
         #[zbus(connection)] conn: &Connection,
-        PlayerOpts {}: PlayerOpts,
+        opts: PlayerOpts,
         to: f64,
     ) -> fdo::Result<f64> {
         self.handle_method(
@@ -680,7 +680,7 @@ impl Server {
     pub async fn seek_absolute(
         &self,
         #[zbus(connection)] conn: &Connection,
-        PlayerOpts {}: PlayerOpts,
+        opts: PlayerOpts,
         to: f64,
     ) -> fdo::Result<f64> {
         self.handle_method(
@@ -697,7 +697,7 @@ impl Server {
     pub async fn vol_relative(
         &self,
         #[zbus(connection)] conn: &Connection,
-        PlayerOpts {}: PlayerOpts,
+        opts: PlayerOpts,
         to: f64,
     ) -> fdo::Result<f64> {
         self.handle_method(
@@ -714,7 +714,7 @@ impl Server {
     pub async fn vol_absolute(
         &self,
         #[zbus(connection)] conn: &Connection,
-        PlayerOpts {}: PlayerOpts,
+        opts: PlayerOpts,
         to: f64,
     ) -> fdo::Result<f64> {
         self.handle_method(
