@@ -18,7 +18,6 @@
 // TODO: convert now-playing to a property
 
 use std::{
-    collections::HashSet,
     fmt,
     fmt::{Display, Formatter},
 };
@@ -74,42 +73,42 @@ enum Opts {
     /// Launch a D-Bus service abstracting MPRIS players
     Server {
         /// Disable info logs (enabled by default if stderr is not a TTY)
-        #[clap(short, long)]
+        #[arg(short, long)]
         quiet: bool,
 
         /// Enable info logs, even if stderr is not a TTY
-        #[clap(long, conflicts_with("quiet"))]
+        #[arg(long, conflicts_with("quiet"))]
         no_quiet: bool,
 
         /// Output extra information to the console
-        #[clap(
+        #[arg(
             short,
             long,
-            parse(from_occurrences),
+            action(clap::ArgAction::Count),
             conflicts_with("quiet"),
-            conflicts_with("no-quiet")
+            conflicts_with("no_quiet")
         )]
-        verbose: usize,
+        verbose: u8,
     },
-    #[clap(flatten)]
+    #[command(flatten)]
     Client(ClientCommand),
 }
 
-#[derive(Debug, Clone, Parser)]
+#[derive(Debug, Clone, clap::Subcommand)]
 enum ClientCommand {
     /// List the players currently tracked by the daemon
     ListPlayers,
     /// Skip one track forwards
     Next(PlayerOpts),
     /// Print information about the current track
-    #[clap(long_about = include_str!("../etc/now_playing_long.txt"))]
+    #[command(long_about = include_str!("../etc/now_playing_long.txt"))]
     NowPlaying {
-        #[clap(flatten)]
+        #[command(flatten)]
         player: PlayerOpts,
 
         /// Instead of outputting JSON, output a plaintext string with the given
         /// format.  See the full help for this command for a syntax reference.
-        #[clap(short, long)]
+        #[arg(short, long)]
         format: Option<String>,
     },
     /// Skip one track backwards
@@ -124,7 +123,7 @@ enum ClientCommand {
     Play(PlayerOpts),
     /// Seek to a position on a player
     Seek {
-        #[clap(flatten)]
+        #[command(flatten)]
         player: PlayerOpts,
 
         /// The position to seek to, either absolute (e.g. 5) or relative (e.g.
@@ -133,13 +132,13 @@ enum ClientCommand {
     },
     /// Get or set the volume on a player
     Volume {
-        #[clap(flatten)]
+        #[command(flatten)]
         player: PlayerOpts,
 
         /// The volume as a number between 0.0 and 1.0, either absolute (e.g.
         /// 0.5) or relative (e.g. 0.1+ or 0.1-).  If no value is given
         /// the current volume is simply printed instead.
-        #[clap(default_value_t = Offset::Relative(0.0))]
+        #[arg(default_value_t = Offset::Relative(0.0))]
         vol: Offset,
     },
     /// Bump the priority of a specific player
@@ -154,18 +153,18 @@ enum ClientCommand {
         /// By default switch-current will pause any currently running players
         /// and play the selected player.  Pass this flag to disable
         /// this behavior.
-        #[clap(short, long)]
+        #[arg(short, long)]
         no_play: bool,
     },
 }
 
 /// Options for filtering the search set of players for the daemon
 #[derive(
-    Debug, Clone, Parser, zvariant::SerializeDict, zvariant::DeserializeDict, zvariant::Type,
+    Debug, Clone, clap::Args, zvariant::SerializeDict, zvariant::DeserializeDict, zvariant::Type,
 )]
 #[zvariant(signature = "dict")]
 pub struct PlayerOpts {
-    #[clap(use_value_delimiter(true))]
+    #[arg(use_value_delimiter(true))]
     state: Vec<PlaybackStatus>,
 }
 
@@ -187,7 +186,7 @@ impl Display for Offset {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
         let offs = self.offset();
         assert!(offs.is_sign_positive());
-        write!(f, "{}", offs)?;
+        write!(f, "{offs}")?;
 
         if matches!(self, Self::Relative(..)) {
             f.write_str(if offs.is_sign_negative() { "-" } else { "+" })?;
@@ -222,16 +221,18 @@ impl ::std::str::FromStr for Offset {
     }
 }
 
-fn log_init(v: usize, f: impl FnOnce(&mut env_logger::Builder)) -> Result {
+fn log_init(v: u8, f: impl FnOnce(&mut env_logger::Builder)) -> Result {
     const VERBOSITY: [LevelFilter; 3] = [LevelFilter::Info, LevelFilter::Debug, LevelFilter::Trace];
     #[cfg(debug_assertions)]
-    const DEFAULT_V: usize = 1;
+    const DEFAULT_V: u8 = 1;
     #[cfg(not(debug_assertions))]
-    const DEFAULT_V: usize = 0;
+    const DEFAULT_V: u8 = 0;
 
     let mut b = env_logger::builder();
 
-    b.filter_level(VERBOSITY[(DEFAULT_V + v).min(VERBOSITY.len() - 1)]);
+    b.filter_level(
+        VERBOSITY[usize::from(DEFAULT_V.saturating_add(v)).min(VERBOSITY.len().saturating_sub(1))],
+    );
 
     f(&mut b);
 
@@ -246,7 +247,7 @@ fn main() {
         Err(e) => {
             log_init(0, |_| ()).ok();
 
-            error!("{:?}", e);
+            error!("{e:?}");
         },
     }
 }

@@ -75,7 +75,7 @@ impl PlayerMap {
         self.names = names;
 
         for name in key_set.difference(&name_set) {
-            trace!("Removing player from map: {:?}", name);
+            trace!("Removing player from map: {name:?}");
 
             assert!(self.remove(name).is_some());
         }
@@ -84,12 +84,12 @@ impl PlayerMap {
             let player = match Player::new(now, BusName::WellKnown(name.into()), conn).await {
                 Ok(p) => p,
                 Err(e) => {
-                    warn!("Constructing player failed: {:?}", e);
+                    warn!("Constructing player failed: {e:?}");
                     continue;
                 },
             };
 
-            trace!("Adding new player to map: {:?}", player);
+            trace!("Adding new player to map: {player:?}");
 
             assert!(self.put(player).is_none());
         }
@@ -101,12 +101,12 @@ impl PlayerMap {
                 match player.refresh().await {
                     Ok(()) => (),
                     Err(e) => {
-                        warn!("Refreshing player failed: {:?}", e);
+                        warn!("Refreshing player failed: {e:?}");
                         continue;
                     },
                 }
 
-                trace!("Updating player in map: {:?}", player);
+                trace!("Updating player in map: {player:?}");
                 assert!(self.put(player).is_none());
             }
         }
@@ -142,7 +142,7 @@ impl PlayerMap {
                 prev = Some(p.status);
 
                 if !ret {
-                    debug!("Stopping active-player search before {:?}", p);
+                    debug!("Stopping active-player search before {p:?}");
                 }
 
                 ret
@@ -157,14 +157,14 @@ impl PlayerMap {
 
         match self.players.entry(player.bus().to_owned()) {
             Entry::Vacant(v) => {
-                trace!("Inserting new player into map: {:?}", player);
+                trace!("Inserting new player into map: {player:?}");
 
                 self.keys.insert(player.get_key());
                 v.insert(player);
                 None
             },
             Entry::Occupied(o) => {
-                trace!("Patching existing player in map: {:?}", player);
+                trace!("Patching existing player in map: {player:?}");
 
                 let value = o.into_mut();
                 assert!(self.keys.remove(&value.get_key()));
@@ -177,13 +177,13 @@ impl PlayerMap {
     pub fn remove<Q: Hash + Eq + std::fmt::Debug>(&mut self, bus: &Q) -> Option<Player>
     where WellKnownName<'static>: Borrow<Q> {
         if let Some(old_player) = self.players.remove(bus) {
-            trace!("Removing player from map: {:?}", bus);
+            trace!("Removing player from map: {bus:?}");
 
             assert!(self.keys.remove(&old_player.get_key()));
 
             Some(old_player)
         } else {
-            trace!("Player to remove does not exist in map: {:?}", bus);
+            trace!("Player to remove does not exist in map: {bus:?}");
 
             None
         }

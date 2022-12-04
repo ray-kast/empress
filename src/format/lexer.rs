@@ -314,7 +314,7 @@ fn int(s: &str) -> BResult {
 fn float(s: &str) -> BResult {
     let (s2, (l, c, r)) = tuple((digit1, char('.'), digit1))(s)?;
 
-    try_bit(s, s2, &format!("{}{}{}", l, c, r), |t| {
+    try_bit(s, s2, &format!("{l}{c}{r}"), |t| {
         Number::from_str(t).map(Bit::Number)
     })
 }

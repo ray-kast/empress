@@ -51,9 +51,9 @@ fn hmss_usec(mut us: i64, neg_zero: bool) -> String {
     min %= 60;
 
     if hr > 0 {
-        write!(s, "{:01}:{:02}:{:02}", hr, min, sec).unwrap();
+        write!(s, "{hr:01}:{min:02}:{sec:02}").unwrap();
     } else {
-        write!(s, "{:01}:{:02}", min, sec).unwrap();
+        write!(s, "{min:01}:{sec:02}").unwrap();
     }
 
     s

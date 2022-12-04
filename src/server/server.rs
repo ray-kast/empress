@@ -11,7 +11,7 @@ use zbus::{
     fdo::{self, DBusProxy},
     names::{BusName, OwnedInterfaceName, UniqueName, WellKnownName},
     zvariant::{OwnedValue, Str, Value},
-    Connection, Message,
+    Connection, MatchRule, Message,
 };
 
 use super::{
@@ -22,7 +22,7 @@ use crate::{Offset, PlayerOpts, Result};
 
 struct SignalMatcher<'a> {
     dbus: DBusProxy<'a>,
-    expr: String,
+    match_rule: Option<MatchRule<'static>>,
 }
 
 impl<'a> Drop for SignalMatcher<'a> {
@@ -31,7 +31,11 @@ impl<'a> Drop for SignalMatcher<'a> {
             .build()
             .unwrap()
             .block_on(async move {
-                match self.dbus.remove_match(&mem::take(&mut self.expr)).await {
+                let Some(mr) = mem::take(&mut self.match_rule) else {
+                    return Ok(());
+                };
+
+                match self.dbus.remove_match_rule(mr).await {
                     Err(fdo::Error::ZBus(zbus::Error::Io(e)))
                         if e.kind() == std::io::ErrorKind::BrokenPipe =>
                     {
@@ -82,10 +86,7 @@ impl Server {
             match msg.body::<(OwnedInterfaceName, HashMap<String, Value>, Vec<String>)>() {
                 Ok(b) => b,
                 Err(e) => {
-                    debug!(
-                        "Failed to deserialize possible PropertiesChanged event: {}",
-                        e
-                    );
+                    debug!("Failed to deserialize possible PropertiesChanged event: {e}");
 
                     return None;
                 },
@@ -125,19 +126,21 @@ impl Server {
         mut stop_rx: mpsc::Receiver<()>,
     ) -> Result<tokio::task::JoinHandle<()>> {
         // TODO: can this be narrowed down further?
-        let expr = concat!(
-            "type='signal',",
-            "interface='org.freedesktop.DBus.Properties',",
-            "member='PropertiesChanged'"
-        );
+        let mr = MatchRule::builder()
+            .msg_type(zbus::MessageType::Signal)
+            .interface("org.freedesktop.DBus.Properties")
+            .unwrap()
+            .member("PropertiesChanged")
+            .unwrap()
+            .build();
         self.dbus
-            .add_match(expr)
+            .add_match_rule(mr.clone())
             .await
             .context("Failed to add message match rule")?;
 
         let matcher = SignalMatcher {
             dbus: self.dbus.clone(),
-            expr: expr.to_owned(),
+            match_rule: Some(mr),
         };
         let mut msgs = zbus::MessageStream::from(conn.clone());
 
@@ -165,7 +168,7 @@ impl Server {
                                 Ok(true) => (),
                                 Ok(false) => continue,
                                 Err(e) => {
-                                    warn!("Failed to process PropertyChanged signal: {:?}", e);
+                                    warn!("Failed to process PropertyChanged signal: {e:?}");
                                     continue;
                                 },
                             }
@@ -182,7 +185,7 @@ impl Server {
                             Ok(true) => (),
                             Ok(false) => continue,
                             Err(e) => {
-                                warn!("Failed to process NameOwnerChanged signal: {:?}", e);
+                                warn!("Failed to process NameOwnerChanged signal: {e:?}");
                                 continue;
                             },
                         }
@@ -242,7 +245,7 @@ impl Server {
         let mut ret = false;
 
         if !changed.is_empty() {
-            trace!("properties on {:?} changed: {:?}", sender.as_str(), changed);
+            trace!("properties on {:?} changed: {changed:?}", sender.as_str());
 
             for (name, val) in changed {
                 // TODO: find a more elegant way to do this
@@ -256,7 +259,7 @@ impl Server {
                             let val: PlaybackStatus = val
                                 .downcast_ref::<str>()?
                                 .parse()
-                                .map_err(|e| warn!("Failed to parse playback status: {}", e))
+                                .map_err(|e| warn!("Failed to parse playback status: {e}"))
                                 .ok()?;
 
                             Some((players, player, val))
@@ -276,9 +279,8 @@ impl Server {
 
         if !invalidated.is_empty() {
             trace!(
-                "properties on {:?} invalidated: {:?}",
+                "properties on {:?} invalidated: {invalidated:?}",
                 sender.as_str(),
-                invalidated
             );
 
             for name in invalidated {
@@ -296,7 +298,7 @@ impl Server {
                             let status = player
                                 .playback_status()
                                 .await
-                                .map_err(|e| warn!("Failed to get player status: {}", e))
+                                .map_err(|e| warn!("Failed to get player status: {e}"))
                                 .ok()?;
 
                             Some((players, player, status))
@@ -327,9 +329,8 @@ impl Server {
             .args()
             .context("Failed to parse NameOwnerChanged arguments")?;
 
-        let name = match Self::filter_player_name(args.name) {
-            Some(n) => n,
-            None => return Ok(false),
+        let Some(name) = Self::filter_player_name(args.name) else {
+            return Ok(false);
         };
 
         if args.old_owner.is_none() && args.new_owner.is_none() {
@@ -414,6 +415,7 @@ impl Server {
         T,
     >(
         &self,
+        opts: PlayerOpts,
         f: F,
     ) -> Result<Option<T>> {
         let mut players = self.shared.players.write().await;
@@ -427,7 +429,7 @@ impl Server {
                 },
                 Ok(None) => patch = Ok(None),
                 Err(e) => {
-                    warn!("Processing player failed: {:?}", e);
+                    warn!("Processing player failed: {e:?}");
                     patch = patch.map_err(|_| Some(()));
                 },
             }
@@ -446,6 +448,7 @@ impl Server {
 
     async fn peek_player_with<F: Fn(Player) -> FR, FR: Future<Output = Result<Option<T>>>, T>(
         &self,
+        opts: PlayerOpts,
         f: F,
     ) -> Result<Option<T>> {
         let players = self.shared.players.read().await;
@@ -456,7 +459,7 @@ impl Server {
                 ok @ Ok(Some(_)) => return ok,
                 Ok(None) => default = Ok(None),
                 Err(e) => {
-                    warn!("Peeking player failed: {:?}", e);
+                    warn!("Peeking player failed: {e:?}");
                     default = default.map_err(|_| Some(()));
                 },
             }
@@ -467,9 +470,10 @@ impl Server {
 
     async fn process_player<F: Fn(Player) -> FR, FR: Future<Output = Result<Option<Player>>>>(
         &self,
+        opts: PlayerOpts,
         f: F,
     ) -> Result<bool> {
-        self.process_player_with(|p| f(p).map_ok(|p| p.map(|p| (p, ()))))
+        self.process_player_with(opts, |p| f(p).map_ok(|p| p.map(|p| (p, ()))))
             .await
             .map(|o| matches!(o, Some(())))
     }
@@ -530,7 +534,7 @@ impl Server {
         self.handle_method(
             conn,
             || {
-                self.peek_player_with(|p| async move {
+                self.peek_player_with(opts, |p| async move {
                     let meta = p.metadata().await?;
 
                     let has_track = meta
@@ -589,7 +593,7 @@ impl Server {
     ) -> fdo::Result<()> {
         self.handle_method(
             conn,
-            || self.process_player(Player::try_next).map_ok(|_| ()),
+            || self.process_player(opts, Player::try_next).map_ok(|_| ()),
             "Failed to skip forward on a player",
         )
         .await
@@ -602,7 +606,10 @@ impl Server {
     ) -> fdo::Result<()> {
         self.handle_method(
             conn,
-            || self.process_player(Player::try_previous).map_ok(|_| ()),
+            || {
+                self.process_player(opts, Player::try_previous)
+                    .map_ok(|_| ())
+            },
             "Failed to skip backward on a player",
         )
         .await
@@ -615,7 +622,7 @@ impl Server {
     ) -> fdo::Result<()> {
         self.handle_method(
             conn,
-            || self.process_player(Player::try_pause).map_ok(|_| ()),
+            || self.process_player(opts, Player::try_pause).map_ok(|_| ()),
             "Failed to pause a player",
         )
         .await
@@ -628,7 +635,10 @@ impl Server {
     ) -> fdo::Result<()> {
         self.handle_method(
             conn,
-            || self.process_player(Player::try_play_pause).map_ok(|_| ()),
+            || {
+                self.process_player(opts, Player::try_play_pause)
+                    .map_ok(|_| ())
+            },
             "Failed to play or pause a player",
         )
         .await
@@ -641,7 +651,7 @@ impl Server {
     ) -> fdo::Result<()> {
         self.handle_method(
             conn,
-            || self.process_player(Player::try_stop).map_ok(|_| ()),
+            || self.process_player(opts, Player::try_stop).map_ok(|_| ()),
             "Failed to stop a player",
         )
         .await
@@ -654,7 +664,7 @@ impl Server {
     ) -> fdo::Result<()> {
         self.handle_method(
             conn,
-            || self.process_player(Player::try_play).map_ok(|_| ()),
+            || self.process_player(opts, Player::try_play).map_ok(|_| ()),
             "Failed to play a player",
         )
         .await
@@ -669,7 +679,7 @@ impl Server {
         self.handle_method(
             conn,
             || {
-                self.process_player_with(|p| p.try_seek(Offset::Relative(to)))
+                self.process_player_with(opts, |p| p.try_seek(Offset::Relative(to)))
                     .map(|p| p?.ok_or_else(|| anyhow!("No players available to seek")))
             },
             "Failed to seek a player",
@@ -686,7 +696,7 @@ impl Server {
         self.handle_method(
             conn,
             || {
-                self.process_player_with(|p| p.try_seek(Offset::Absolute(to)))
+                self.process_player_with(opts, |p| p.try_seek(Offset::Absolute(to)))
                     .map(|p| p?.ok_or_else(|| anyhow!("No players available to seek")))
             },
             "Failed to seek a player",
@@ -703,7 +713,7 @@ impl Server {
         self.handle_method(
             conn,
             || {
-                self.process_player_with(|p| p.try_set_volume(Offset::Relative(to)))
+                self.process_player_with(opts, |p| p.try_set_volume(Offset::Relative(to)))
                     .map(|p| p?.ok_or_else(|| anyhow!("No players available to get/adjust volume")))
             },
             "Failed to get/adjust a player's volume",
@@ -720,7 +730,7 @@ impl Server {
         self.handle_method(
             conn,
             || {
-                self.process_player_with(|p| p.try_set_volume(Offset::Absolute(to)))
+                self.process_player_with(opts, |p| p.try_set_volume(Offset::Absolute(to)))
                     .map(|p| p?.ok_or_else(|| anyhow!("No players available to set volume")))
             },
             "Failed to set a player's volume",
@@ -737,12 +747,11 @@ impl Server {
         self.handle_method(
             conn,
             || async {
-                let bus = WellKnownName::try_from(format!("{}.{}", *mpris::BUS_NAME, to))
-                    .map_err(|s| anyhow!("{:?} is not a valid bus name", s))?;
+                let bus = WellKnownName::try_from(format!("{}.{to}", *mpris::BUS_NAME))
+                    .map_err(|s| anyhow!("{s:?} is not a valid bus name"))?;
 
-                let curr = match self.shared.players.write().await.remove(&bus) {
-                    Some(c) => c,
-                    None => return Err(anyhow!("No players stored with the given bus name")),
+                let Some(curr) = self.shared.players.write().await.remove(&bus) else {
+                    return Err(anyhow!("No players stored with the given bus name"));
                 };
 
                 let mut curr = if switch_playing {

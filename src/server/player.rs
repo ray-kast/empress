@@ -357,13 +357,13 @@ impl Player {
         };
 
         if !vol.is_finite() {
-            return Err(anyhow!("Invalid volume {:?}", vol));
+            return Err(anyhow!("Invalid volume {vol:?}"));
         }
 
         Ok(if set {
             if self.can_control().await? {
                 // Safety check
-                let vol = vol.max(0.0).min(1.0);
+                let vol = vol.clamp(0.0, 1.0);
 
                 self.set_volume(vol).await?;
 

@@ -13,7 +13,7 @@ pub(super) fn json(value: &Value) -> String {
 
 pub(super) fn assert_no_topic<D: Debug>(topic: &Option<CowValue>, d: &D) -> Result<()> {
     match topic {
-        Some(_) => Err(Error::ExtraTopic(format!("{:?}", d))),
+        Some(_) => Err(Error::ExtraTopic(format!("{d:?}"))),
         None => Ok(()),
     }
 }
@@ -99,7 +99,7 @@ impl Stream<'static> for &Value {
     fn stream(self, (): (), mut out: impl Write) -> Result<(), StreamError> {
         match self {
             Value::Null => Ok(()),
-            Value::Number(n) => out.write_fmt(format_args!("{}", n)).map_err(Into::into),
+            Value::Number(n) => out.write_fmt(format_args!("{n}")).map_err(Into::into),
             Value::String(s) => out.write_str(s).map_err(Into::into),
             Value::Bool(_) | Value::Array(_) | Value::Object(_) => {
                 Err(StreamError::Unprintable(self.clone()))

@@ -108,13 +108,13 @@ pub(super) async fn run(cmd: ClientCommand) -> Result {
             let players = try_send(|| proxy.list_players()).await?;
 
             for (player, status) in players {
-                println!("{}\t{}", player, status);
+                println!("{player}\t{status}");
             }
         },
         ClientCommand::NowPlaying { player, format } => {
             let resp = try_send(|| proxy.now_playing(&player)).await?;
 
-            trace!("Full now-playing response: {:?}", resp);
+            trace!("Full now-playing response: {resp:?}");
 
             let resp: NowPlayingResult = resp.try_into()?;
 
@@ -146,7 +146,7 @@ pub(super) async fn run(cmd: ClientCommand) -> Result {
         } => {
             let vol = try_send(|| proxy.vol_relative(&player, to)).await?;
 
-            print!("{}", vol);
+            print!("{vol}");
 
             if atty::is(atty::Stream::Stdout) {
                 println!();
@@ -158,7 +158,7 @@ pub(super) async fn run(cmd: ClientCommand) -> Result {
         } => {
             let vol = try_send(|| proxy.vol_absolute(&player, to)).await?;
 
-            print!("{}", vol);
+            print!("{vol}");
 
             if atty::is(atty::Stream::Stdout) {
                 println!();
@@ -180,12 +180,12 @@ async fn try_send<F: Future<Output = zbus::fdo::Result<R>>, R>(call: impl Fn() -
 
     loop {
         match call().await {
-            Err(e) if i < MAX_TRIES => warn!("Request failed: {}", e),
+            Err(e) if i < MAX_TRIES => warn!("Request failed: {e}"),
             r => break r.context("Failed to contact empress server"),
         }
 
         i += 1;
-        info!("Retry attempt {}", i);
+        info!("Retry attempt {i}");
 
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
