@@ -16,8 +16,7 @@ use zbus::{
 use super::{mpris::player::PlaybackStatus, Player};
 use crate::Result;
 
-// TODO: track changes to the current player (and its status) and ensure the map
-//       fields remain in lock step after every mutation
+// TODO: smoke-test map update logic
 
 #[derive(Debug, PartialEq, Eq)]
 struct PlayerKey {

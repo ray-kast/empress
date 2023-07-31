@@ -64,12 +64,6 @@ lazy_static! {
         format!("{}/Daemon", *PATH_PREFIX).try_into().unwrap();
 }
 
-pub(crate) mod metadata {
-    pub const PLAYER_BUS: &str = "empress:playerBus";
-    pub const PLAYER_IDENTITY: &str = "empress:playerIdentity";
-    pub const POSITION: &str = "empress:position";
-}
-
 #[derive(Parser)]
 #[command(author, about, version)]
 enum Opts {

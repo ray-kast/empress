@@ -2,7 +2,7 @@ use std::{collections::HashMap, future::Future, mem, sync::Arc, time::Instant};
 
 use anyhow::{anyhow, Context};
 use futures_util::{stream, FutureExt, StreamExt, TryFutureExt, TryStreamExt};
-use log::{debug, info, trace, warn};
+use log::{debug, error, trace, warn};
 use tokio::{
     select,
     sync::{mpsc, RwLock},
@@ -234,11 +234,15 @@ impl ServerInner {
                 .map_err(|e| warn!("Error unregistering background scan matcher: {e:?}"))
                 .ok();
 
-            // TODO: consider panicking if there are extant references to the
-            //       server at this point
-            info!("Background scanner terminated");
-
             mem::drop(matcher);
+
+            // If the server still holds a reference to the player map then we
+            // are not supposed to be here
+            if Arc::strong_count(&self.shared) > 1 {
+                error!("Background scanner terminated unexpectedly!");
+
+                dispose::abort_on_panic(|| panic!("Background scanner terminated unexpectedly!"));
+            }
         }))
     }
 
@@ -257,7 +261,6 @@ impl ServerInner {
 
         let players = self.shared.players.read().await;
 
-        // TODO: unsure how to avoid this to_owned()
         let sender = players
             .resolve(&sender.to_owned())
             .ok_or_else(|| anyhow!("Unexpected bus name"))?
@@ -363,7 +366,6 @@ impl ServerInner {
         let mut players = self.shared.players.write().await;
 
         if let Some(old) = Option::<UniqueName>::from(args.old_owner) {
-            // TODO: unsure how to avoid this to_owned()
             players.remove_owner(&old.to_owned());
 
             trace!("{:?} lost {:?}", old.as_str(), name.as_str());
@@ -523,6 +525,13 @@ impl ServerInner {
 
 #[zbus::dbus_interface(name = "net.ryan_s.Empress2.Daemon")]
 impl Server {
+    #[dbus_interface(signal)]
+    pub async fn player_changed(
+        &self,
+        ctx: &zbus::SignalContext<'_>,
+        change: &PlayerStatus,
+    ) -> zbus::Result<()>;
+
     pub async fn list_players(&self) -> fdo::Result<PlayerList> {
         self.handle_method(
             || async {
@@ -544,18 +553,6 @@ impl Server {
         )
         .await
     }
-
-    #[dbus_interface(signal)]
-    pub async fn player_changed(
-        &self,
-        ctx: &zbus::SignalContext<'_>,
-        change: &PlayerStatus,
-    ) -> zbus::Result<()>;
-
-    // #[dbus_interface(property)]
-    // pub async fn now_playing(&self) -> PlayerStatus {
-    //     todo!()
-    // }
 
     pub async fn player_status(&self, opts: PlayerOpts) -> fdo::Result<PlayerStatus> {
         self.handle_method(

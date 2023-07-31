@@ -19,7 +19,7 @@ use crate::{Result, SERVER_NAME, SERVER_PATH};
 pub mod mpris;
 mod player;
 mod player_map;
-// TODO: deal with this
+// TODO: rename Server to something like Handler
 #[allow(clippy::module_inception)] // I'm aware, but the struct is called Server
 mod server;
 

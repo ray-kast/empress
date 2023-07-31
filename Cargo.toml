@@ -22,6 +22,7 @@ anyhow = "1.0.72"
 async-trait = "0.1.72"
 atty = "0.2.14"
 clap = { version = "4.3.19", features = ["derive"] }
+dispose = "0.5.0"
 env_logger = "0.10.0"
 futures-util = "0.3.28"
 lalrpop-util = { version = "0.20.0", features = ["lexer"] }
