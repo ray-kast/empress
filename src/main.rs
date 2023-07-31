@@ -14,8 +14,6 @@
 //! details.
 
 // TODO: implement PlayerOpts
-// TODO: add a refresh subcommand
-//        - add warnings for detected sync errors during refresh
 // TODO: convert now-playing to a property
 
 use std::{
@@ -93,6 +91,8 @@ enum Opts {
 
 #[derive(Debug, Clone, clap::Subcommand)]
 enum ClientCommand {
+    /// Scan for any player updates the daemon missed
+    Scan,
     /// List the players currently tracked by the daemon
     ListPlayers,
     /// Skip one track forwards

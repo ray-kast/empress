@@ -11,6 +11,8 @@ use crate::{
     default_path = "/net/ryan_s/Empress2/Daemon"
 )]
 trait Empress {
+    fn scan(&self) -> fdo::Result<Vec<String>>;
+
     fn list_players(&self) -> fdo::Result<PlayerList>;
 
     fn player_status(&self, opts: &PlayerOpts) -> fdo::Result<PlayerStatus>;

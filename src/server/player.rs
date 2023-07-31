@@ -38,13 +38,13 @@ async fn timeout<
 
 impl Player {
     pub async fn new(
-        last_update: Instant,
+        now: Instant,
         name: impl Into<BusName<'static>> + Clone,
         conn: &Connection,
     ) -> Result<Self> {
         let mut ret = Self {
             status: PlaybackStatus::Stopped,
-            last_update,
+            last_update: now,
             mp2: MediaPlayerProxy::builder(conn)
                 .destination(name.clone())
                 .context("Error setting MediaPlayer2 proxy destination")?
@@ -61,15 +61,21 @@ impl Player {
                 .into(),
         };
 
-        ret.refresh().await?;
+        ret.refresh(now).await?;
 
         Ok(ret)
     }
 
-    pub async fn refresh(&mut self) -> Result<()> {
-        self.status = self.playback_status().await?;
+    pub async fn refresh(&mut self, now: Instant) -> Result<bool> {
+        let next_status = self.playback_status().await?;
+        let ret = self.status == next_status;
+        self.status = next_status;
 
-        Ok(())
+        if ret {
+            self.last_update = now;
+        }
+
+        Ok(ret)
     }
 
     //////// Accessors ////////

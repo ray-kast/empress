@@ -16,8 +16,8 @@ use zbus::{
 };
 
 use super::{
-    method_err, mpris, mpris::player::PlaybackStatus, Player, PlayerList, PlayerMap, PlayerStatus,
-    PlayerStatusKind, ZResult,
+    method_err, mpris, mpris::player::PlaybackStatus, player_map::PlayerChange, Player, PlayerList,
+    PlayerMap, PlayerStatus, PlayerStatusKind, ZResult,
 };
 use crate::{Offset, PlayerOpts, Result};
 
@@ -82,7 +82,7 @@ impl Server {
             .clone()
             .spawn_background_scanner(conn.clone(), stop_rx)
             .await?;
-        inner.scan(conn, false).await?;
+        inner.scan(conn, false, None).await?;
 
         Ok((
             Self {
@@ -412,7 +412,12 @@ impl ServerInner {
             .await
     }
 
-    async fn scan(&self, conn: impl std::borrow::Borrow<Connection>, force: bool) -> Result {
+    async fn scan(
+        &self,
+        conn: impl std::borrow::Borrow<Connection>,
+        force: bool,
+        changes: Option<&mut Vec<PlayerChange>>,
+    ) -> Result<()> {
         let conn = conn.borrow();
         if force {
             debug!("Running full scan...");
@@ -426,7 +431,7 @@ impl ServerInner {
             .players
             .write()
             .await
-            .inform(conn, now, force, self.get_player_name_map().await?)
+            .inform(conn, now, force, self.get_player_name_map().await?, changes)
             .await;
 
         trace!("Scan completed.");
@@ -531,6 +536,18 @@ impl Server {
         ctx: &zbus::SignalContext<'_>,
         change: &PlayerStatus,
     ) -> zbus::Result<()>;
+
+    pub async fn scan(&self, #[zbus(connection)] conn: &Connection) -> fdo::Result<Vec<String>> {
+        self.handle_method(
+            || async {
+                let mut changes = Vec::new();
+                self.inner.scan(conn, true, Some(&mut changes)).await?;
+                Ok(changes.iter().map(ToString::to_string).collect())
+            },
+            "Error scanning for players",
+        )
+        .await
+    }
 
     pub async fn list_players(&self) -> fdo::Result<PlayerList> {
         self.handle_method(

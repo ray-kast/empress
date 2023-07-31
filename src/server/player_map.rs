@@ -54,6 +54,22 @@ impl GetKey for Player {
     }
 }
 
+pub enum PlayerChange {
+    Add(WellKnownName<'static>),
+    Refresh(WellKnownName<'static>),
+    Remove(WellKnownName<'static>),
+}
+
+impl std::fmt::Display for PlayerChange {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Add(n) => write!(f, "{n:?} added"),
+            Self::Refresh(n) => write!(f, "{n:?} refreshed"),
+            Self::Remove(n) => write!(f, "{n:?} removed"),
+        }
+    }
+}
+
 #[derive(Debug)]
 pub(super) struct PlayerMap {
     players: HashMap<WellKnownName<'static>, Player>,
@@ -68,6 +84,7 @@ impl PlayerMap {
         now: Instant,
         try_patch: bool,
         names: HashMap<UniqueName<'static>, WellKnownName<'static>>,
+        mut changes: Option<&mut Vec<PlayerChange>>,
     ) {
         let key_set: HashSet<_> = self.players.keys().cloned().collect();
         let name_set: HashSet<_> = names.values().cloned().collect();
@@ -78,6 +95,9 @@ impl PlayerMap {
         for name in key_set.difference(&name_set) {
             trace!("Removing player from map: {name:?}");
 
+            if let Some(ref mut c) = changes {
+                c.push(PlayerChange::Remove(name.clone()));
+            }
             assert!(self.remove(name).is_some());
         }
 
@@ -92,6 +112,9 @@ impl PlayerMap {
 
             trace!("Adding new player to map: {player:?}");
 
+            if let Some(ref mut c) = changes {
+                c.push(PlayerChange::Add(name.clone()));
+            }
             assert!(self.put(player).is_none());
         }
 
@@ -99,8 +122,13 @@ impl PlayerMap {
             for name in name_set.intersection(&key_set) {
                 let mut player = self.players.remove(name).unwrap();
 
-                match player.refresh().await {
-                    Ok(()) => (),
+                match player.refresh(now).await {
+                    Ok(true) => {
+                        if let Some(ref mut c) = changes {
+                            c.push(PlayerChange::Refresh(name.clone()));
+                        }
+                    },
+                    Ok(false) => (),
                     Err(e) => {
                         warn!("Error refreshing player: {e:?}");
                         continue;

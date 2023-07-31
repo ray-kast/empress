@@ -78,6 +78,7 @@ impl TryFrom<PlayerStatus> for NowPlayingResult {
     }
 }
 
+#[allow(clippy::too_many_lines)] // Not really much to do about this...
 pub(super) async fn run(cmd: ClientCommand) -> Result {
     let conn = ConnectionBuilder::session()
         .context("Error creatihng session connection builder")?
@@ -95,6 +96,17 @@ pub(super) async fn run(cmd: ClientCommand) -> Result {
     );
 
     match cmd {
+        ClientCommand::Scan => {
+            let log = try_send(&proxy, EmpressProxy::scan).await?;
+
+            if log.is_empty() {
+                info!("No changes detected");
+            } else {
+                for line in log {
+                    warn!("Change detected: {line}");
+                }
+            }
+        },
         ClientCommand::Next(opts) => {
             try_send(&proxy, |p| p.next(&opts)).await?;
         },
