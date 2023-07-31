@@ -134,7 +134,7 @@ fn json(inp: Input) -> Output {
     let (_ctx, Topic(Any(v)), ()) = inp.try_into()?;
 
     Ok(Owned(Value::String(
-        serde_json::to_string(v.as_ref()).context("Failed to serialize JSON")?,
+        serde_json::to_string(v.as_ref()).context("Error serializing JSON")?,
     )))
 }
 

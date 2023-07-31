@@ -75,7 +75,7 @@ impl Server {
             }),
             dbus: DBusProxy::new(&conn)
                 .await
-                .context("Failed to create D-Bus proxy")?,
+                .context("Error creating D-Bus proxy")?,
         };
 
         let scanner_handle = inner
@@ -124,7 +124,7 @@ impl ServerInner {
             match msg.body::<(OwnedInterfaceName, HashMap<String, Value>, Vec<String>)>() {
                 Ok(b) => b,
                 Err(e) => {
-                    debug!("Failed to deserialize possible PropertiesChanged event: {e}");
+                    debug!("Error deserializing possible PropertiesChanged event: {e}");
 
                     return None;
                 },
@@ -153,7 +153,7 @@ impl ServerInner {
         self.dbus
             .add_match_rule(mr.clone())
             .await
-            .context("Failed to add message match rule")?;
+            .context("Error adding message match rule")?;
 
         let mut matcher = SignalMatcher {
             dbus: self.dbus.clone(),
@@ -165,7 +165,7 @@ impl ServerInner {
             .dbus
             .receive_name_owner_changed()
             .await
-            .context("Failed to create NameOwnerChanged listener")?;
+            .context("Error creating NameOwnerChanged listener")?;
 
         Ok(tokio::spawn(async move {
             enum Event {
@@ -185,7 +185,7 @@ impl ServerInner {
                                 Ok(true) => (),
                                 Ok(false) => continue,
                                 Err(e) => {
-                                    warn!("Failed to process PropertyChanged signal: {e:?}");
+                                    warn!("Error processing PropertyChanged signal: {e:?}");
                                     continue;
                                 },
                             }
@@ -202,7 +202,7 @@ impl ServerInner {
                             Ok(true) => (),
                             Ok(false) => continue,
                             Err(e) => {
-                                warn!("Failed to process NameOwnerChanged signal: {e:?}");
+                                warn!("Error processing NameOwnerChanged signal: {e:?}");
                                 continue;
                             },
                         }
@@ -282,7 +282,7 @@ impl ServerInner {
                             let val: PlaybackStatus = val
                                 .downcast_ref::<str>()?
                                 .parse()
-                                .map_err(|e| warn!("Failed to parse playback status: {e}"))
+                                .map_err(|e| warn!("Error parsing playback status: {e}"))
                                 .ok()?;
 
                             Some((players, player, val))
@@ -321,7 +321,7 @@ impl ServerInner {
                             let status = player
                                 .playback_status()
                                 .await
-                                .map_err(|e| warn!("Failed to get player status: {e}"))
+                                .map_err(|e| warn!("Error getting player status: {e}"))
                                 .ok()?;
 
                             Some((players, player, status))
@@ -350,7 +350,7 @@ impl ServerInner {
     ) -> Result<bool> {
         let args = chng
             .args()
-            .context("Failed to parse NameOwnerChanged arguments")?;
+            .context("Error parsing NameOwnerChanged arguments")?;
 
         let Some(name) = Self::filter_player_name(args.name) else {
             return Ok(false);
@@ -385,7 +385,7 @@ impl ServerInner {
             .dbus
             .list_names()
             .await
-            .context("Failed to list bus names")?
+            .context("Error listing bus names")?
             .into_iter()
             .filter_map(|n| Self::filter_player_name(n.into_inner())))
     }
@@ -452,15 +452,17 @@ impl ServerInner {
                 },
                 Ok(None) => patch = Ok(None),
                 Err(e) => {
-                    warn!("Processing player failed: {e:?}");
+                    warn!("Error processing player: {e:?}");
                     patch = patch.map_err(|_| Some(()));
                 },
             }
         }
 
-        if let Some((next, ret)) = patch
-            .or_else(|e| e.map_or(Ok(None), |()| Err(anyhow!("All players failed to process"))))?
-        {
+        if let Some((next, ret)) = patch.or_else(|e| {
+            e.map_or(Ok(None), |()| {
+                Err(anyhow!("No players could be processed without errors"))
+            })
+        })? {
             players.put(next);
 
             return Ok(Some(ret));
@@ -482,13 +484,17 @@ impl ServerInner {
                 ok @ Ok(Some(_)) => return ok,
                 Ok(None) => default = Ok(None),
                 Err(e) => {
-                    warn!("Peeking player failed: {e:?}");
+                    warn!("Error peeking player: {e:?}");
                     default = default.map_err(|_| Some(()));
                 },
             }
         }
 
-        default.or_else(|e| e.map_or(Ok(None), |()| Err(anyhow!("All players failed to peek"))))
+        default.or_else(|e| {
+            e.map_or(Ok(None), |()| {
+                Err(anyhow!("No players could be peeked without errors"))
+            })
+        })
     }
 
     async fn process_player<F: Fn(Player) -> FR, FR: Future<Output = Result<Option<Player>>>>(
@@ -534,7 +540,7 @@ impl Server {
                     })
                     .collect())
             },
-            "Failed to list players",
+            "Error listing players",
         )
         .await
     }
@@ -593,7 +599,7 @@ impl Server {
                 })
                 .map_ok(Option::unwrap_or_default)
             },
-            "Failed to get current track info",
+            "Error getting player status",
         )
         .await
     }
@@ -601,7 +607,7 @@ impl Server {
     pub async fn next(&self, opts: PlayerOpts) -> fdo::Result<()> {
         self.handle_method(
             || self.process_player(opts, Player::try_next).map_ok(|_| ()),
-            "Failed to skip forward on a player",
+            "Error skipping player forward",
         )
         .await
     }
@@ -612,7 +618,7 @@ impl Server {
                 self.process_player(opts, Player::try_previous)
                     .map_ok(|_| ())
             },
-            "Failed to skip backward on a player",
+            "Error skipping player backward",
         )
         .await
     }
@@ -620,7 +626,7 @@ impl Server {
     pub async fn pause(&self, opts: PlayerOpts) -> fdo::Result<()> {
         self.handle_method(
             || self.process_player(opts, Player::try_pause).map_ok(|_| ()),
-            "Failed to pause a player",
+            "Error pausing player",
         )
         .await
     }
@@ -631,7 +637,7 @@ impl Server {
                 self.process_player(opts, Player::try_play_pause)
                     .map_ok(|_| ())
             },
-            "Failed to play or pause a player",
+            "Error playing/pausing player",
         )
         .await
     }
@@ -639,7 +645,7 @@ impl Server {
     pub async fn stop(&self, opts: PlayerOpts) -> fdo::Result<()> {
         self.handle_method(
             || self.process_player(opts, Player::try_stop).map_ok(|_| ()),
-            "Failed to stop a player",
+            "Error stopping player",
         )
         .await
     }
@@ -647,7 +653,7 @@ impl Server {
     pub async fn play(&self, opts: PlayerOpts) -> fdo::Result<()> {
         self.handle_method(
             || self.process_player(opts, Player::try_play).map_ok(|_| ()),
-            "Failed to play a player",
+            "Error playing player",
         )
         .await
     }
@@ -658,7 +664,7 @@ impl Server {
                 self.process_player_with(opts, |p| p.try_seek(Offset::Relative(to)))
                     .map(|p| p?.ok_or_else(|| anyhow!("No players available to seek")))
             },
-            "Failed to seek a player",
+            "Error seeking player",
         )
         .await
     }
@@ -669,7 +675,7 @@ impl Server {
                 self.process_player_with(opts, |p| p.try_seek(Offset::Absolute(to)))
                     .map(|p| p?.ok_or_else(|| anyhow!("No players available to seek")))
             },
-            "Failed to seek a player",
+            "Error seeking player",
         )
         .await
     }
@@ -680,7 +686,7 @@ impl Server {
                 self.process_player_with(opts, |p| p.try_set_volume(Offset::Relative(to)))
                     .map(|p| p?.ok_or_else(|| anyhow!("No players available to get/adjust volume")))
             },
-            "Failed to get/adjust a player's volume",
+            "Error getting/adjusting player volume",
         )
         .await
     }
@@ -691,7 +697,7 @@ impl Server {
                 self.process_player_with(opts, |p| p.try_set_volume(Offset::Absolute(to)))
                     .map(|p| p?.ok_or_else(|| anyhow!("No players available to set volume")))
             },
-            "Failed to set a player's volume",
+            "Error setting player volume",
         )
         .await
     }
@@ -723,14 +729,14 @@ impl Server {
                         let player = player
                             .pause()
                             .await
-                            .context("Failed to pause another player")?;
+                            .context("Error pausing an unselected player")?;
 
                         players.put(player);
                     }
 
                     curr.play()
                         .await
-                        .context("Failed to play selected player")?
+                        .context("Error playing selected player")?
                 } else {
                     curr
                 };
@@ -740,7 +746,7 @@ impl Server {
 
                 Ok(())
             },
-            "Failed to switch the current player",
+            "Error switching current player",
         )
         .await
     }

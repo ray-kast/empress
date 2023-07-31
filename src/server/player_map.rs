@@ -84,7 +84,7 @@ impl PlayerMap {
             let player = match Player::new(now, BusName::WellKnown(name.into()), conn).await {
                 Ok(p) => p,
                 Err(e) => {
-                    warn!("Constructing player failed: {e:?}");
+                    warn!("Error constructing player: {e:?}");
                     continue;
                 },
             };
@@ -101,7 +101,7 @@ impl PlayerMap {
                 match player.refresh().await {
                     Ok(()) => (),
                     Err(e) => {
-                        warn!("Refreshing player failed: {e:?}");
+                        warn!("Error refreshing player: {e:?}");
                         continue;
                     },
                 }
@@ -208,7 +208,7 @@ impl PlayerMap {
                     this.put(
                         Player::new(now, bus, conn)
                             .await
-                            .context("Failed to construct a new player")?,
+                            .context("Error constructing a new player")?,
                     )
                     .is_none()
                 );

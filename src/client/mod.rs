@@ -71,18 +71,18 @@ impl TryFrom<PlayerStatus> for NowPlayingResult {
 
 pub(super) async fn run(cmd: ClientCommand) -> Result {
     let conn = ConnectionBuilder::session()
-        .context("Failed to create session connection builder")?
+        .context("Error creatihng session connection builder")?
         .build()
         .await
-        .context("Failed to connect to D-Bus")?;
+        .context("Error connecting to D-Bus")?;
 
     // TODO: declare timeout
     let proxy = proxy::EmpressProxy::builder(&conn)
         .destination(&*SERVER_NAME)
-        .context("Failed to set empress proxy destination")?
+        .context("Error setting empress proxy destination")?
         .build()
         .await
-        .context("Failed to create server proxy")?;
+        .context("Error building server proxy")?;
 
     match cmd {
         ClientCommand::Next(opts) => {
@@ -180,7 +180,7 @@ async fn try_send<F: Future<Output = zbus::fdo::Result<R>>, R>(call: impl Fn() -
     loop {
         match call().await {
             Err(e) if i < MAX_TRIES => warn!("Request failed: {e}"),
-            r => break r.context("Failed to contact empress server"),
+            r => break r.context("Unable to contact empress server"),
         }
 
         i += 1;

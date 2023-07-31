@@ -33,17 +33,17 @@ impl Player {
             // TODO: declare timeout
             mp2: MediaPlayerProxy::builder(conn)
                 .destination(name.clone())
-                .context("Failed to set MediaPlayer2 proxy destination")?
+                .context("Error setting MediaPlayer2 proxy destination")?
                 .build()
                 .await
-                .context("Failed to build MediaPlayer2 proxy")?,
+                .context("Error building MediaPlayer2 proxy")?,
             // TODO: declare timeout
             player: PlayerProxy::builder(conn)
                 .destination(name)
-                .context("Failed to set player proxy destination")?
+                .context("Error setting player proxy destination")?
                 .build()
                 .await
-                .context("Failed to build player proxy")?,
+                .context("Error building player proxy")?,
         };
 
         ret.refresh().await?;

@@ -13,7 +13,6 @@
 //! README](https://github.com/ray-kast/empress/blob/master/README.md) for more
 //! details.
 
-// TODO: stop saying "Failed to"
 // TODO: implement PlayerOpts
 // TODO: add a refresh subcommand
 //        - add warnings for detected sync errors during refresh
@@ -263,7 +262,7 @@ fn run() -> Result {
     let rt = RtBuilder::new_current_thread()
         .enable_all()
         .build()
-        .context("Failed to start runtime")?;
+        .context("Error starting async runtime")?;
 
     let opts = Opts::parse();
 

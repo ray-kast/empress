@@ -18,13 +18,13 @@ type ParseError<T> = lalrpop_util::ParseError<lexer::Pos, T, &'static str>;
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
-    #[error("Failed to parse format string")]
+    #[error("Error parsing format string")]
     Lex(#[from] NomError<String>),
-    #[error("Failed to parse format string")]
+    #[error("Error parsing format string")]
     Parse(#[from] ParseError<String>),
-    #[error("Failed to load context into the interpreter")]
+    #[error("Error loading context into the interpreter")]
     Values(#[from] anyhow::Error),
-    #[error("Failed to evaluate format string")]
+    #[error("Error evaluating format string")]
     Interpret(#[from] interp::Error),
 }
 

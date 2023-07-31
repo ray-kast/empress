@@ -29,7 +29,7 @@ pub(super) fn is_null_like(val: &Value) -> bool {
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
-    #[error("Failed to write format output")]
+    #[error("Error writing format output")]
     Stream(#[source] StreamError),
     #[error("Unexpected pipe input when evaluating {0}")]
     ExtraTopic(String),

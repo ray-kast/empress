@@ -48,23 +48,26 @@ pub(self) use player_map::PlayerMap;
 
 pub(self) fn method_err(e: impl Into<Error>, msg: impl fmt::Display) -> ZError {
     let msg = msg.to_string();
-    error!("Method hander failed: {:?}", e.into().context(msg.clone()));
+    error!(
+        "Method handler returned an error: {:?}",
+        e.into().context(msg.clone())
+    );
     ZError::Failed(msg)
 }
 
 pub async fn run() -> Result {
     let conn = ConnectionBuilder::session()
-        .context("Failed to create connection builder")?
+        .context("Error creating connection builder")?
         .build()
         .await
-        .context("Failed to connect to D-Bus")?;
+        .context("Error connecting to D-Bus")?;
 
     let (srv, join) = Server::new(conn.clone()).await?;
     let created = conn
         .object_server()
         .at(&*SERVER_PATH, srv)
         .await
-        .context("Failed to register server")?;
+        .context("Error registering server")?;
 
     if !created {
         anyhow::bail!("Object server already exists");
@@ -72,12 +75,12 @@ pub async fn run() -> Result {
 
     conn.request_name(&*SERVER_NAME)
         .await
-        .context("Failed to request server name")?;
+        .context("Error requesting server name")?;
 
-    let mut hup = unix::signal(SignalKind::hangup()).context("Failed to hook SIGHUP")?;
-    let mut int = unix::signal(SignalKind::interrupt()).context("Failed to hook SIGINT")?;
-    let mut quit = unix::signal(SignalKind::quit()).context("Failed to hook SIGQUIT")?;
-    let mut term = unix::signal(SignalKind::terminate()).context("Failed to hook SIGTERM")?;
+    let mut hup = unix::signal(SignalKind::hangup()).context("Error hooking SIGHUP")?;
+    let mut int = unix::signal(SignalKind::interrupt()).context("Error hooking SIGINT")?;
+    let mut quit = unix::signal(SignalKind::quit()).context("Error hooking SIGQUIT")?;
+    let mut term = unix::signal(SignalKind::terminate()).context("Error hooking SIGTERM")?;
 
     select!(
         Some(()) = hup.recv() => (),
