@@ -60,7 +60,9 @@ impl Player {
     //////// Accessors ////////
 
     #[inline]
-    pub fn status(&self) -> PlaybackStatus { self.status }
+    pub fn status(&self) -> PlaybackStatus {
+        self.status
+    }
 
     #[inline]
     pub fn update_status(&mut self, status: PlaybackStatus) -> Option<Instant> {
@@ -75,7 +77,9 @@ impl Player {
     }
 
     #[inline]
-    pub fn last_update(&self) -> Instant { self.last_update }
+    pub fn last_update(&self) -> Instant {
+        self.last_update
+    }
 
     #[inline]
     pub fn force_update(&mut self) -> Instant {

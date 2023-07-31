@@ -34,7 +34,7 @@ pub type Result<T> = std::result::Result<T, Error>;
 pub type Output<'a> = Result<CowValue<'a>>;
 pub type Function = for<'a> fn(Input<'a>) -> Output<'a>;
 
-#[allow(missing_debug_implementations)]
+#[derive(Debug)]
 pub struct Input<'a> {
     ctx: &'a Context,
     topic: Option<CowValue<'a>>,

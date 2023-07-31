@@ -7,7 +7,7 @@ use zbus::ConnectionBuilder;
 
 use crate::{
     format,
-    server::{mpris, mpris::player::PlaybackStatus, OwnedNowPlayingResponse},
+    server::{mpris, mpris::player::PlaybackStatus, PlayerStatus, PlayerStatusKind},
     ClientCommand, Offset, Result, SERVER_NAME,
 };
 
@@ -32,30 +32,29 @@ struct NowPlayingResult {
     position: Option<i64>,
 }
 
-impl TryFrom<OwnedNowPlayingResponse> for NowPlayingResult {
+impl TryFrom<PlayerStatus> for NowPlayingResult {
     type Error = Error;
 
-    fn try_from((mut map, status): OwnedNowPlayingResponse) -> Result<Self> {
-        let bus = map
-            .remove(crate::metadata::PLAYER_BUS)
-            .and_then(|v| v.try_into().ok());
-        let id = map
-            .remove(crate::metadata::PLAYER_IDENTITY)
-            .and_then(|v| v.try_into().ok());
-        let title = map
+    fn try_from(status: PlayerStatus) -> Result<Self> {
+        let PlayerStatus { kind, bus, ident, status, position, mut metadata } = status;
+
+        let (bus, id, position) = match kind {
+            PlayerStatusKind::NoPlayer => (None, None, None),
+            PlayerStatusKind::NoPosition => (Some(bus), Some(ident), None),
+            PlayerStatusKind::Default => (Some(bus), Some(ident), Some(position)),
+        };
+
+        let title = metadata
             .remove(mpris::track_list::ATTR_TITLE)
             .and_then(|v| v.try_into().ok());
-        let artist = map
+        let artist = metadata
             .remove(mpris::track_list::ATTR_ARTIST)
             .and_then(|v| v.try_into().ok());
-        let album = map
+        let album = metadata
             .remove(mpris::track_list::ATTR_ALBUM)
             .and_then(|v| v.try_into().ok());
-        let length = map
+        let length = metadata
             .remove(mpris::track_list::ATTR_LENGTH)
-            .and_then(|v| v.try_into().ok());
-        let position = map
-            .remove(crate::metadata::POSITION)
             .and_then(|v| v.try_into().ok());
 
         Ok(Self {
@@ -112,7 +111,7 @@ pub(super) async fn run(cmd: ClientCommand) -> Result {
             }
         },
         ClientCommand::NowPlaying { player, format } => {
-            let resp = try_send(|| proxy.now_playing(&player)).await?;
+            let resp = try_send(|| proxy.player_status(&player)).await?;
 
             trace!("Full now-playing response: {resp:?}");
 

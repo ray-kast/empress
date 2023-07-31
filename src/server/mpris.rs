@@ -79,6 +79,7 @@ pub mod player {
         Eq,
         PartialOrd,
         Ord,
+        Default,
         strum::EnumString,
         strum::Display,
         serde::Serialize,
@@ -90,17 +91,22 @@ pub mod player {
     pub enum PlaybackStatus {
         Playing,
         Paused,
+        #[default]
         Stopped,
     }
 
     impl From<PlaybackStatus> for String {
-        fn from(s: PlaybackStatus) -> Self { s.to_string() }
+        fn from(s: PlaybackStatus) -> Self {
+            s.to_string()
+        }
     }
 
     impl TryFrom<String> for PlaybackStatus {
         type Error = <Self as std::str::FromStr>::Err;
 
-        fn try_from(value: String) -> Result<Self, Self::Error> { value.parse() }
+        fn try_from(value: String) -> Result<Self, Self::Error> {
+            value.parse()
+        }
     }
 
     impl TryFrom<OwnedValue> for PlaybackStatus {

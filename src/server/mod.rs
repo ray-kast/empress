@@ -9,7 +9,7 @@ use tokio::{
 };
 use zbus::{
     fdo::{Error as ZError, Result as ZResult},
-    zvariant::OwnedValue,
+    zvariant::{self, OwnedValue},
     ConnectionBuilder,
 };
 
@@ -23,9 +23,23 @@ mod player_map;
 #[allow(clippy::module_inception)] // I'm aware, but the struct is called Server
 mod server;
 
-// TODO: incorporate PlaybackStatus into the hash map
-// pub type NowPlayingResponse<'a> = (HashMap<String, Value<'a>>, PlaybackStatus);
-pub type OwnedNowPlayingResponse = (HashMap<String, OwnedValue>, PlaybackStatus);
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize, zvariant::Type)]
+pub enum PlayerStatusKind {
+    #[default]
+    NoPlayer,
+    NoPosition,
+    Default,
+}
+
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize, zvariant::Type)]
+pub struct PlayerStatus {
+    pub kind: PlayerStatusKind,
+    pub bus: String,
+    pub ident: String,
+    pub status: PlaybackStatus,
+    pub position: i64,
+    pub metadata: HashMap<String, OwnedValue>,
+}
 
 pub type PlayerList = Vec<(String, PlaybackStatus)>;
 
@@ -45,10 +59,16 @@ pub async fn run() -> Result {
         .await
         .context("Failed to connect to D-Bus")?;
 
-    conn.object_server()
-        .at(&*SERVER_PATH, Server::new(conn.clone()).await?)
+    let (srv, join) = Server::new(conn.clone()).await?;
+    let created = conn
+        .object_server()
+        .at(&*SERVER_PATH, srv)
         .await
         .context("Failed to register server")?;
+
+    if !created {
+        anyhow::bail!("Object server already exists");
+    }
 
     conn.request_name(&*SERVER_NAME)
         .await
@@ -71,6 +91,18 @@ pub async fn run() -> Result {
     );
 
     info!("Shutting down...");
+
+    let srv = conn
+        .object_server()
+        .remove::<Server, _>(&*SERVER_PATH)
+        .await
+        .context("Error unregistering server")?;
+
+    if !srv {
+        unreachable!("Object server not found at expected registered path");
+    }
+
+    join.await.context("Error shutting down server")?;
 
     Ok(())
 }

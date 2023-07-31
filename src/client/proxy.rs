@@ -1,7 +1,7 @@
 use zbus::fdo;
 
 use crate::{
-    server::{OwnedNowPlayingResponse, PlayerList},
+    server::{PlayerList, PlayerStatus},
     PlayerOpts,
 };
 
@@ -13,7 +13,7 @@ use crate::{
 trait Empress {
     fn list_players(&self) -> fdo::Result<PlayerList>;
 
-    fn now_playing(&self, opts: &PlayerOpts) -> fdo::Result<OwnedNowPlayingResponse>;
+    fn player_status(&self, opts: &PlayerOpts) -> fdo::Result<PlayerStatus>;
 
     fn next(&self, opts: &PlayerOpts) -> fdo::Result<()>;
 

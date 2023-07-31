@@ -1,6 +1,8 @@
 #![deny(
+    clippy::disallowed_methods,
     clippy::suspicious,
     clippy::style,
+    clippy::clone_on_ref_ptr,
     rustdoc::broken_intra_doc_links,
     missing_debug_implementations,
     missing_copy_implementations
@@ -11,6 +13,7 @@
 //! README](https://github.com/ray-kast/empress/blob/master/README.md) for more
 //! details.
 
+// TODO: stop saying "Failed to"
 // TODO: implement PlayerOpts
 // TODO: add a refresh subcommand
 //        - add warnings for detected sync errors during refresh
@@ -69,6 +72,7 @@ pub(crate) mod metadata {
 }
 
 #[derive(Parser)]
+#[command(author, about, version)]
 enum Opts {
     /// Launch a D-Bus service abstracting MPRIS players
     Server {
@@ -164,7 +168,10 @@ enum ClientCommand {
 )]
 #[zvariant(signature = "dict")]
 pub struct PlayerOpts {
-    #[arg(use_value_delimiter(true))]
+    #[arg(long, short)]
+    name: Option<String>,
+
+    #[arg(long, use_value_delimiter(true))]
     state: Vec<PlaybackStatus>,
 }
 

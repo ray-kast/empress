@@ -6,17 +6,18 @@ use log::{debug, info, trace, warn};
 use tokio::{
     select,
     sync::{mpsc, RwLock},
+    task::JoinHandle,
 };
 use zbus::{
     fdo::{self, DBusProxy},
     names::{BusName, OwnedInterfaceName, UniqueName, WellKnownName},
-    zvariant::{OwnedValue, Str, Value},
+    zvariant::Value,
     Connection, MatchRule, Message,
 };
 
 use super::{
-    method_err, mpris, mpris::player::PlaybackStatus, OwnedNowPlayingResponse, Player, PlayerList,
-    PlayerMap, ZResult,
+    method_err, mpris, mpris::player::PlaybackStatus, Player, PlayerList, PlayerMap, PlayerStatus,
+    PlayerStatusKind, ZResult,
 };
 use crate::{Offset, PlayerOpts, Result};
 
@@ -25,39 +26,39 @@ struct SignalMatcher<'a> {
     match_rule: Option<MatchRule<'static>>,
 }
 
-impl<'a> Drop for SignalMatcher<'a> {
-    fn drop(&mut self) {
-        tokio::runtime::Builder::new_current_thread()
-            .build()
-            .unwrap()
-            .block_on(async move {
-                let Some(mr) = mem::take(&mut self.match_rule) else {
-                    return Ok(());
-                };
-
-                match self.dbus.remove_match_rule(mr).await {
-                    Err(fdo::Error::ZBus(zbus::Error::Io(e)))
-                        if e.kind() == std::io::ErrorKind::BrokenPipe =>
-                    {
-                        // TODO: this is most likely because of the construction
-                        //       of a new runtime - need to look into marshaling
-                        //       this block onto an existing runtime
-                        warn!("Socket hung up before the signal listener was destroyed");
-                        Ok(())
-                    },
-                    r => r,
-                }
-            })
-            .expect("Removing signal listener failed");
+impl<'a> SignalMatcher<'a> {
+    pub async fn shutdown(&mut self) -> Result {
+        self.dbus
+            .remove_match_rule(
+                self.match_rule.take().ok_or_else(|| {
+                    anyhow!("shutdown() called on already-closed signal matcher!")
+                })?,
+            )
+            .await
+            .context("Error removing signal match rule")
     }
 }
 
-#[derive(Clone)]
+impl<'a> Drop for SignalMatcher<'a> {
+    fn drop(&mut self) {
+        // TODO: async drop wen eta son
+        assert!(
+            self.match_rule.is_none(),
+            "Signal matcher dropped without calling .shutdown()!"
+        );
+    }
+}
+
 pub(super) struct Server {
+    inner: ServerInner,
+    #[allow(dead_code)] // This signals the scanner by getting dropped
+    stop_scanner: mpsc::Sender<()>,
+}
+
+#[derive(Clone)]
+pub(super) struct ServerInner {
     shared: Arc<Shared>,
     dbus: DBusProxy<'static>,
-    #[allow(dead_code)]
-    stop_prop_changed: mpsc::Sender<()>,
 }
 
 struct Shared {
@@ -65,6 +66,43 @@ struct Shared {
 }
 
 impl Server {
+    pub async fn new(conn: Connection) -> Result<(Self, impl Future<Output = Result>)> {
+        let (stop_scanner, stop_rx) = mpsc::channel(1);
+
+        let inner = ServerInner {
+            shared: Arc::new(Shared {
+                players: RwLock::new(PlayerMap::new()),
+            }),
+            dbus: DBusProxy::new(&conn)
+                .await
+                .context("Failed to create D-Bus proxy")?,
+        };
+
+        let scanner_handle = inner
+            .clone()
+            .spawn_background_scanner(conn.clone(), stop_rx)
+            .await?;
+        inner.scan(conn, false).await?;
+
+        Ok((
+            Self {
+                inner,
+                stop_scanner,
+            },
+            scanner_handle.map_err(|e| anyhow!("Background scanner panicked: {e:?}")),
+        ))
+    }
+}
+
+impl std::ops::Deref for Server {
+    type Target = ServerInner;
+
+    fn deref(&self) -> &Self::Target {
+        &self.inner
+    }
+}
+
+impl ServerInner {
     fn filter_player_name(name: BusName) -> Option<WellKnownName> {
         match name {
             BusName::WellKnown(w) if w.starts_with(mpris::BUS_NAME.as_str()) => Some(w),
@@ -99,32 +137,11 @@ impl Server {
         Some((changed, invalidated))
     }
 
-    pub async fn new(conn: Connection) -> Result<Self> {
-        let (stop_prop_changed, stop_rx) = mpsc::channel(1);
-
-        let this = Self {
-            shared: Arc::new(Shared {
-                players: RwLock::new(PlayerMap::new()),
-            }),
-            dbus: DBusProxy::new(&conn)
-                .await
-                .context("Failed to create D-Bus proxy")?,
-            stop_prop_changed,
-        };
-
-        this.clone()
-            .spawn_background_scanner(conn.clone(), stop_rx)
-            .await?;
-        this.scan(conn, false).await?;
-
-        Ok(this)
-    }
-
     async fn spawn_background_scanner(
         self,
         conn: Connection,
         mut stop_rx: mpsc::Receiver<()>,
-    ) -> Result<tokio::task::JoinHandle<()>> {
+    ) -> Result<JoinHandle<()>> {
         // TODO: can this be narrowed down further?
         let mr = MatchRule::builder()
             .msg_type(zbus::MessageType::Signal)
@@ -138,7 +155,7 @@ impl Server {
             .await
             .context("Failed to add message match rule")?;
 
-        let matcher = SignalMatcher {
+        let mut matcher = SignalMatcher {
             dbus: self.dbus.clone(),
             match_rule: Some(mr),
         };
@@ -210,6 +227,12 @@ impl Server {
                     s
                 });
             }
+
+            matcher
+                .shutdown()
+                .await
+                .map_err(|e| warn!("Error unregistering background scan matcher: {e:?}"))
+                .ok();
 
             // TODO: consider panicking if there are extant references to the
             //       server at this point
@@ -485,27 +508,17 @@ impl Server {
         E: std::fmt::Display + Sync,
     >(
         &self,
-        _conn: &Connection,
         f: F,
         msg: E,
     ) -> ZResult<T> {
-        // TODO: clean this and the unused parameter up
-        // self.scan(conn, false)
-        //     .await
-        //     .map_err(|e| method_err(e, "Failed to scan for players"))?;
-
         f().await.map_err(|e| method_err(e, msg))
     }
 }
 
 #[zbus::dbus_interface(name = "net.ryan_s.Empress2.Daemon")]
 impl Server {
-    pub async fn list_players(
-        &self,
-        #[zbus(connection)] conn: &Connection,
-    ) -> fdo::Result<PlayerList> {
+    pub async fn list_players(&self) -> fdo::Result<PlayerList> {
         self.handle_method(
-            conn,
             || async {
                 Ok(self
                     .shared
@@ -526,23 +539,31 @@ impl Server {
         .await
     }
 
-    pub async fn now_playing(
+    #[dbus_interface(signal)]
+    pub async fn player_changed(
         &self,
-        #[zbus(connection)] conn: &Connection,
-        opts: PlayerOpts,
-    ) -> fdo::Result<OwnedNowPlayingResponse> {
+        ctx: &zbus::SignalContext<'_>,
+        change: &PlayerStatus,
+    ) -> zbus::Result<()>;
+
+    // #[dbus_interface(property)]
+    // pub async fn now_playing(&self) -> PlayerStatus {
+    //     todo!()
+    // }
+
+    pub async fn player_status(&self, opts: PlayerOpts) -> fdo::Result<PlayerStatus> {
         self.handle_method(
-            conn,
             || {
                 self.peek_player_with(opts, |p| async move {
-                    let meta = p.metadata().await?;
+                    let metadata = p.metadata().await?;
 
-                    let has_track = meta
-                        .get(mpris::track_list::ATTR_TRACKID)
-                        .map_or(false, |v| match v.into() {
-                            Value::ObjectPath(p) => p != mpris::track_list::NO_TRACK.as_ref(),
-                            _ => false,
-                        });
+                    let has_track =
+                        metadata
+                            .get(mpris::track_list::ATTR_TRACKID)
+                            .map_or(false, |v| match v.into() {
+                                Value::ObjectPath(p) => p != mpris::track_list::NO_TRACK.as_ref(),
+                                _ => false,
+                            });
 
                     let bus = p
                         .bus()
@@ -550,62 +571,43 @@ impl Server {
                         .and_then(|s| s.strip_prefix('.'))
                         .map_or_else(String::new, Into::into);
                     let ident = p.identity().await?;
-
-                    // Properties that should go into the map regardless of if we have a track
-                    let extra_props: [(String, OwnedValue); 2] = [
-                        (crate::metadata::PLAYER_BUS.into(), Str::from(bus).into()),
-                        (
-                            crate::metadata::PLAYER_IDENTITY.into(),
-                            Str::from(ident).into(),
-                        ),
-                    ];
-
-                    Ok(Some(if has_track {
-                        let mut meta: HashMap<_, _> = meta.into_iter().chain(extra_props).collect();
-
-                        let pos = p.position().await.ok();
-
-                        if let Some(pos) = pos {
-                            meta.insert(crate::metadata::POSITION.into(), pos.into());
-                        }
-
-                        (meta, p.status())
+                    let status = p.status();
+                    let position = if has_track {
+                        p.position().await.ok()
                     } else {
-                        (extra_props.into_iter().collect(), p.status())
+                        None
+                    };
+
+                    Ok(Some(PlayerStatus {
+                        kind: if position.is_some() {
+                            PlayerStatusKind::Default
+                        } else {
+                            PlayerStatusKind::NoPosition
+                        },
+                        bus,
+                        ident,
+                        status,
+                        position: position.unwrap_or(0),
+                        metadata,
                     }))
                 })
-                .map_ok(|ok| {
-                    let (map, status) =
-                        ok.unwrap_or_else(|| (HashMap::new(), PlaybackStatus::Stopped));
-
-                    (map, status)
-                })
+                .map_ok(Option::unwrap_or_default)
             },
             "Failed to get current track info",
         )
         .await
     }
 
-    pub async fn next(
-        &self,
-        #[zbus(connection)] conn: &Connection,
-        opts: PlayerOpts,
-    ) -> fdo::Result<()> {
+    pub async fn next(&self, opts: PlayerOpts) -> fdo::Result<()> {
         self.handle_method(
-            conn,
             || self.process_player(opts, Player::try_next).map_ok(|_| ()),
             "Failed to skip forward on a player",
         )
         .await
     }
 
-    pub async fn prev(
-        &self,
-        #[zbus(connection)] conn: &Connection,
-        opts: PlayerOpts,
-    ) -> fdo::Result<()> {
+    pub async fn prev(&self, opts: PlayerOpts) -> fdo::Result<()> {
         self.handle_method(
-            conn,
             || {
                 self.process_player(opts, Player::try_previous)
                     .map_ok(|_| ())
@@ -615,26 +617,16 @@ impl Server {
         .await
     }
 
-    pub async fn pause(
-        &self,
-        #[zbus(connection)] conn: &Connection,
-        opts: PlayerOpts,
-    ) -> fdo::Result<()> {
+    pub async fn pause(&self, opts: PlayerOpts) -> fdo::Result<()> {
         self.handle_method(
-            conn,
             || self.process_player(opts, Player::try_pause).map_ok(|_| ()),
             "Failed to pause a player",
         )
         .await
     }
 
-    pub async fn play_pause(
-        &self,
-        #[zbus(connection)] conn: &Connection,
-        opts: PlayerOpts,
-    ) -> fdo::Result<()> {
+    pub async fn play_pause(&self, opts: PlayerOpts) -> fdo::Result<()> {
         self.handle_method(
-            conn,
             || {
                 self.process_player(opts, Player::try_play_pause)
                     .map_ok(|_| ())
@@ -644,40 +636,24 @@ impl Server {
         .await
     }
 
-    pub async fn stop(
-        &self,
-        #[zbus(connection)] conn: &Connection,
-        opts: PlayerOpts,
-    ) -> fdo::Result<()> {
+    pub async fn stop(&self, opts: PlayerOpts) -> fdo::Result<()> {
         self.handle_method(
-            conn,
             || self.process_player(opts, Player::try_stop).map_ok(|_| ()),
             "Failed to stop a player",
         )
         .await
     }
 
-    pub async fn play(
-        &self,
-        #[zbus(connection)] conn: &Connection,
-        opts: PlayerOpts,
-    ) -> fdo::Result<()> {
+    pub async fn play(&self, opts: PlayerOpts) -> fdo::Result<()> {
         self.handle_method(
-            conn,
             || self.process_player(opts, Player::try_play).map_ok(|_| ()),
             "Failed to play a player",
         )
         .await
     }
 
-    pub async fn seek_relative(
-        &self,
-        #[zbus(connection)] conn: &Connection,
-        opts: PlayerOpts,
-        to: f64,
-    ) -> fdo::Result<f64> {
+    pub async fn seek_relative(&self, opts: PlayerOpts, to: f64) -> fdo::Result<f64> {
         self.handle_method(
-            conn,
             || {
                 self.process_player_with(opts, |p| p.try_seek(Offset::Relative(to)))
                     .map(|p| p?.ok_or_else(|| anyhow!("No players available to seek")))
@@ -687,14 +663,8 @@ impl Server {
         .await
     }
 
-    pub async fn seek_absolute(
-        &self,
-        #[zbus(connection)] conn: &Connection,
-        opts: PlayerOpts,
-        to: f64,
-    ) -> fdo::Result<f64> {
+    pub async fn seek_absolute(&self, opts: PlayerOpts, to: f64) -> fdo::Result<f64> {
         self.handle_method(
-            conn,
             || {
                 self.process_player_with(opts, |p| p.try_seek(Offset::Absolute(to)))
                     .map(|p| p?.ok_or_else(|| anyhow!("No players available to seek")))
@@ -704,14 +674,8 @@ impl Server {
         .await
     }
 
-    pub async fn vol_relative(
-        &self,
-        #[zbus(connection)] conn: &Connection,
-        opts: PlayerOpts,
-        to: f64,
-    ) -> fdo::Result<f64> {
+    pub async fn vol_relative(&self, opts: PlayerOpts, to: f64) -> fdo::Result<f64> {
         self.handle_method(
-            conn,
             || {
                 self.process_player_with(opts, |p| p.try_set_volume(Offset::Relative(to)))
                     .map(|p| p?.ok_or_else(|| anyhow!("No players available to get/adjust volume")))
@@ -721,14 +685,8 @@ impl Server {
         .await
     }
 
-    pub async fn vol_absolute(
-        &self,
-        #[zbus(connection)] conn: &Connection,
-        opts: PlayerOpts,
-        to: f64,
-    ) -> fdo::Result<f64> {
+    pub async fn vol_absolute(&self, opts: PlayerOpts, to: f64) -> fdo::Result<f64> {
         self.handle_method(
-            conn,
             || {
                 self.process_player_with(opts, |p| p.try_set_volume(Offset::Absolute(to)))
                     .map(|p| p?.ok_or_else(|| anyhow!("No players available to set volume")))
@@ -738,14 +696,8 @@ impl Server {
         .await
     }
 
-    pub async fn switch_current(
-        &self,
-        #[zbus(connection)] conn: &Connection,
-        to: &str,
-        switch_playing: bool,
-    ) -> fdo::Result<()> {
+    pub async fn switch_current(&self, to: &str, switch_playing: bool) -> fdo::Result<()> {
         self.handle_method(
-            conn,
             || async {
                 let bus = WellKnownName::try_from(format!("{}.{to}", *mpris::BUS_NAME))
                     .map_err(|s| anyhow!("{s:?} is not a valid bus name"))?;
