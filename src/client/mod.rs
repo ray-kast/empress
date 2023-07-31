@@ -5,9 +5,11 @@ use log::{info, trace, warn};
 use serde::Serialize;
 use zbus::ConnectionBuilder;
 
+use self::proxy::EmpressProxy;
 use crate::{
     format,
     server::{mpris, mpris::player::PlaybackStatus, PlayerStatus, PlayerStatusKind},
+    timeout::Timeout,
     ClientCommand, Offset, Result, SERVER_NAME,
 };
 
@@ -83,42 +85,43 @@ pub(super) async fn run(cmd: ClientCommand) -> Result {
         .await
         .context("Error connecting to D-Bus")?;
 
-    // TODO: declare timeout
-    let proxy = proxy::EmpressProxy::builder(&conn)
-        .destination(&*SERVER_NAME)
-        .context("Error setting empress proxy destination")?
-        .build()
-        .await
-        .context("Error building server proxy")?;
+    let proxy = Timeout::from(
+        proxy::EmpressProxy::builder(&conn)
+            .destination(&*SERVER_NAME)
+            .context("Error setting empress proxy destination")?
+            .build()
+            .await
+            .context("Error building server proxy")?,
+    );
 
     match cmd {
         ClientCommand::Next(opts) => {
-            try_send(|| proxy.next(&opts)).await?;
+            try_send(&proxy, |p| p.next(&opts)).await?;
         },
         ClientCommand::Previous(opts) => {
-            try_send(|| proxy.prev(&opts)).await?;
+            try_send(&proxy, |p| p.prev(&opts)).await?;
         },
         ClientCommand::Pause(opts) => {
-            try_send(|| proxy.pause(&opts)).await?;
+            try_send(&proxy, |p| p.pause(&opts)).await?;
         },
         ClientCommand::PlayPause(opts) => {
-            try_send(|| proxy.play_pause(&opts)).await?;
+            try_send(&proxy, |p| p.play_pause(&opts)).await?;
         },
         ClientCommand::Stop(opts) => {
-            try_send(|| proxy.stop(&opts)).await?;
+            try_send(&proxy, |p| p.stop(&opts)).await?;
         },
         ClientCommand::Play(opts) => {
-            try_send(|| proxy.play(&opts)).await?;
+            try_send(&proxy, |p| p.play(&opts)).await?;
         },
         ClientCommand::ListPlayers => {
-            let players = try_send(|| proxy.list_players()).await?;
+            let players = try_send(&proxy, EmpressProxy::list_players).await?;
 
             for (player, status) in players {
                 println!("{player}\t{status}");
             }
         },
         ClientCommand::NowPlaying { player, format } => {
-            let resp = try_send(|| proxy.player_status(&player)).await?;
+            let resp = try_send(&proxy, |p| p.player_status(&player)).await?;
 
             trace!("Full now-playing response: {resp:?}");
 
@@ -138,19 +141,19 @@ pub(super) async fn run(cmd: ClientCommand) -> Result {
             player,
             to: Offset::Relative(to),
         } => {
-            try_send(|| proxy.seek_relative(&player, to)).await?;
+            try_send(&proxy, |p| p.seek_relative(&player, to)).await?;
         },
         ClientCommand::Seek {
             player,
             to: Offset::Absolute(to),
         } => {
-            try_send(|| proxy.seek_absolute(&player, to)).await?;
+            try_send(&proxy, |p| p.seek_absolute(&player, to)).await?;
         },
         ClientCommand::Volume {
             player,
             vol: Offset::Relative(to),
         } => {
-            let vol = try_send(|| proxy.vol_relative(&player, to)).await?;
+            let vol = try_send(&proxy, |p| p.vol_relative(&player, to)).await?;
 
             print!("{vol}");
 
@@ -162,7 +165,7 @@ pub(super) async fn run(cmd: ClientCommand) -> Result {
             player,
             vol: Offset::Absolute(to),
         } => {
-            let vol = try_send(|| proxy.vol_absolute(&player, to)).await?;
+            let vol = try_send(&proxy, |p| p.vol_absolute(&player, to)).await?;
 
             print!("{vol}");
 
@@ -172,20 +175,29 @@ pub(super) async fn run(cmd: ClientCommand) -> Result {
         },
         ClientCommand::SwitchCurrent { to, no_play } => {
             let switch_playing = !no_play;
-            try_send(|| proxy.switch_current(&to, switch_playing)).await?;
+            try_send(&proxy, |p| p.switch_current(&to, switch_playing)).await?;
         },
     }
 
     Ok(())
 }
 
-async fn try_send<F: Future<Output = zbus::fdo::Result<R>>, R>(call: impl Fn() -> F) -> Result<R> {
+async fn try_send<
+    'a,
+    T,
+    F: Fn(&'a T) -> FR + Copy + 'a,
+    FR: Future<Output = zbus::fdo::Result<R>>,
+    R,
+>(
+    with: &'a Timeout<T>,
+    call: F,
+) -> Result<R> {
     const MAX_TRIES: usize = 5;
 
     let mut i = 0;
 
     loop {
-        match call().await {
+        match with.try_run(Duration::from_secs(2), call).await {
             Err(e) if i < MAX_TRIES => warn!("Request failed: {e}"),
             r => break r.context("Unable to contact empress server"),
         }

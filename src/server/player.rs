@@ -11,14 +11,29 @@ use super::{
     mpris,
     mpris::{player::PlaybackStatus, MediaPlayerProxy, PlayerProxy},
 };
-use crate::{Offset, Result};
+use crate::{timeout::Timeout, Offset, Result};
 
 #[derive(Debug, Clone)]
 pub(super) struct Player {
     status: PlaybackStatus,
     last_update: Instant,
-    mp2: MediaPlayerProxy<'static>,
-    player: PlayerProxy<'static>,
+    mp2: Timeout<MediaPlayerProxy<'static>>,
+    player: Timeout<PlayerProxy<'static>>,
+}
+
+#[inline]
+async fn timeout<
+    'a,
+    T: 'a,
+    F: FnOnce(&'a T) -> FR + 'a,
+    FR: std::future::Future<Output = Result<R, E>>,
+    R,
+    E,
+>(
+    t: &'a Timeout<T>,
+    f: F,
+) -> Result<R, crate::timeout::Error<E>> {
+    t.try_run(std::time::Duration::from_secs(2), f).await
 }
 
 impl Player {
@@ -30,20 +45,20 @@ impl Player {
         let mut ret = Self {
             status: PlaybackStatus::Stopped,
             last_update,
-            // TODO: declare timeout
             mp2: MediaPlayerProxy::builder(conn)
                 .destination(name.clone())
                 .context("Error setting MediaPlayer2 proxy destination")?
                 .build()
                 .await
-                .context("Error building MediaPlayer2 proxy")?,
-            // TODO: declare timeout
+                .context("Error building MediaPlayer2 proxy")?
+                .into(),
             player: PlayerProxy::builder(conn)
                 .destination(name)
                 .context("Error setting player proxy destination")?
                 .build()
                 .await
-                .context("Error building player proxy")?,
+                .context("Error building player proxy")?
+                .into(),
         };
 
         ret.refresh().await?;
@@ -90,8 +105,9 @@ impl Player {
 
     #[inline]
     pub fn bus(&self) -> &WellKnownName {
-        debug_assert_eq!(self.mp2.destination(), self.player.destination());
-        match self.player.destination() {
+        let player_dest = unsafe { self.player.smuggle(|p| p.destination()) };
+        debug_assert!(self.mp2.block(|m| m.destination() == player_dest));
+        match player_dest {
             BusName::Unique(u) => unreachable!("MPRIS bus had unique name {:?}", u.as_str()),
             BusName::WellKnown(w) => w,
         }
@@ -100,8 +116,7 @@ impl Player {
     //////// Methods under MediaPlayer2.Player ////////
 
     pub async fn next(self) -> Result<Self> {
-        self.player
-            .next()
+        timeout(&self.player, PlayerProxy::next)
             .await
             .context("Proxy call for Next failed")?;
 
@@ -112,8 +127,7 @@ impl Player {
     }
 
     pub async fn previous(self) -> Result<Self> {
-        self.player
-            .previous()
+        timeout(&self.player, PlayerProxy::previous)
             .await
             .context("Proxy call for Previous failed")?;
 
@@ -124,8 +138,7 @@ impl Player {
     }
 
     pub async fn pause(self) -> Result<Self> {
-        self.player
-            .pause()
+        timeout(&self.player, PlayerProxy::pause)
             .await
             .context("Proxy call for Pause failed")?;
 
@@ -137,8 +150,7 @@ impl Player {
     }
 
     pub async fn stop(self) -> Result<Self> {
-        self.player
-            .stop()
+        timeout(&self.player, PlayerProxy::stop)
             .await
             .context("Proxy call for Stop failed")?;
 
@@ -150,8 +162,7 @@ impl Player {
     }
 
     pub async fn play(self) -> Result<Self> {
-        self.player
-            .play()
+        timeout(&self.player, PlayerProxy::play)
             .await
             .context("Proxy call for Play failed")?;
 
@@ -164,8 +175,7 @@ impl Player {
 
     #[allow(clippy::cast_possible_truncation)]
     pub async fn set_position(self, id: ObjectPath<'_>, secs: i64) -> Result<Self> {
-        self.player
-            .set_position(id, secs)
+        timeout(&self.player, |p| p.set_position(id, secs))
             .await
             .context("Proxy call for SetPosition failed")?;
 
@@ -178,8 +188,7 @@ impl Player {
     //////// Properties under MediaPlayer2 ////////
 
     pub async fn identity(&self) -> Result<String> {
-        self.mp2
-            .identity()
+        timeout(&self.mp2, MediaPlayerProxy::identity)
             .await
             .context("Proxy property get for Identity failed")
     }
@@ -187,78 +196,67 @@ impl Player {
     //////// Properties under MediaPlayer2.Player ////////
 
     pub async fn playback_status(&self) -> Result<PlaybackStatus> {
-        self.player
-            .playback_status()
+        timeout(&self.player, PlayerProxy::playback_status)
             .await
             .context("Proxy property get for PlaybackStatus failed")
     }
 
     pub async fn metadata(&self) -> Result<HashMap<String, OwnedValue>> {
-        self.player
-            .metadata()
+        timeout(&self.player, PlayerProxy::metadata)
             .await
             .context("Proxy property get for Metadata failed")
     }
 
     pub async fn volume(&self) -> Result<f64> {
-        self.player
-            .volume()
+        timeout(&self.player, PlayerProxy::volume)
             .await
             .context("Proxy property get for Volume failed")
     }
 
     pub async fn set_volume(&self, vol: f64) -> Result<()> {
-        self.player
-            .set_volume(vol)
+        timeout(&self.player, |p| p.set_volume(vol))
             .await
             .context("Proxy property set for Volume failed")
     }
 
     pub async fn position(&self) -> Result<i64> {
-        self.player
-            .position()
+        timeout(&self.player, PlayerProxy::position)
             .await
             .context("Proxy property get for Position failed")
     }
 
     pub async fn can_go_next(&self) -> Result<bool> {
-        self.player
-            .can_go_next()
+        timeout(&self.player, PlayerProxy::can_go_next)
             .await
             .context("Proxy property get for CanGoNext failed")
     }
 
     pub async fn can_go_previous(&self) -> Result<bool> {
-        self.player
-            .can_go_previous()
+        timeout(&self.player, PlayerProxy::can_go_previous)
             .await
             .context("Proxy property get for CanGoPrevious failed")
     }
 
     pub async fn can_play(&self) -> Result<bool> {
-        self.player
-            .can_play()
+        timeout(&self.player, PlayerProxy::can_play)
             .await
             .context("Proxy property get for CanPlay failed")
     }
 
     pub async fn can_pause(&self) -> Result<bool> {
-        self.player
-            .can_pause()
+        timeout(&self.player, PlayerProxy::can_pause)
             .await
             .context("Proxy property get for CanPause failed")
     }
 
     pub async fn can_seek(&self) -> Result<bool> {
-        self.player
-            .can_seek()
+        timeout(&self.player, PlayerProxy::can_seek)
             .await
             .context("Proxy property get for CanSeek failed")
     }
 
     pub async fn can_control(&self) -> Result<bool> {
-        self.player
-            .can_control()
+        timeout(&self.player, PlayerProxy::can_control)
             .await
             .context("Proxy property get for CanControl failed")
     }
