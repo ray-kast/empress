@@ -138,7 +138,9 @@ fn json(inp: Input) -> Output {
     )))
 }
 
-fn lower(inp: Input) -> Output { stream_str(inp, |s| s.to_lowercase()) }
+fn lower(inp: Input) -> Output {
+    stream_str(inp, |s| s.to_lowercase())
+}
 
 fn shorten(inp: Input) -> Output {
     let (_ctx, Topic(Any(val)), (Number::<usize>(len), (Any(ell), ()))) = inp.try_into()?;
@@ -222,9 +224,13 @@ fn time(inp: Input) -> Output {
     Ok(Owned(Value::String(hmss_usec(len, false))))
 }
 
-fn trim(inp: Input) -> Output { stream_str(inp, |s| s.trim().to_owned()) }
+fn trim(inp: Input) -> Output {
+    stream_str(inp, |s| s.trim().to_owned())
+}
 
-fn upper(inp: Input) -> Output { stream_str(inp, |s| s.to_uppercase()) }
+fn upper(inp: Input) -> Output {
+    stream_str(inp, |s| s.to_uppercase())
+}
 
 fn xml(inp: Input) -> Output {
     lazy_static::lazy_static! {

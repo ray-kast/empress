@@ -133,7 +133,9 @@ fn btag(val: &'static str, b: Bit<'static>) -> impl for<'a> Fn(&'a str) -> BResu
     }
 }
 
-fn any1(s: &str) -> IResult<&str, &str> { s.split_at_position1_complete(|_| true, ErrorKind::Char) }
+fn any1(s: &str) -> IResult<&str, &str> {
+    s.split_at_position1_complete(|_| true, ErrorKind::Char)
+}
 
 // Adapted from split_at_position1_complete
 fn split_before<'a, O, E>(
@@ -292,7 +294,11 @@ fn ident(s: &str) -> BResult {
                 c.is_alphanumeric()
             };
 
-        if matches { None } else { Some(i) }
+        if matches {
+            None
+        } else {
+            Some(i)
+        }
     }) {
         Some(0) => err(s),
         // char_indices() returns a byte index that is already

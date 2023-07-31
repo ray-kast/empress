@@ -734,9 +734,7 @@ impl Server {
                         players.put(player);
                     }
 
-                    curr.play()
-                        .await
-                        .context("Error playing selected player")?
+                    curr.play().await.context("Error playing selected player")?
                 } else {
                     curr
                 };

@@ -27,7 +27,9 @@ struct PlayerKey {
 }
 
 impl cmp::PartialOrd for PlayerKey {
-    fn partial_cmp(&self, other: &Self) -> Option<cmp::Ordering> { Some(self.cmp(other)) }
+    fn partial_cmp(&self, other: &Self) -> Option<cmp::Ordering> {
+        Some(self.cmp(other))
+    }
 }
 
 impl cmp::Ord for PlayerKey {
@@ -121,7 +123,9 @@ impl PlayerMap {
     }
 
     pub fn resolve<Q: Hash + Eq>(&self, uniq: &Q) -> Option<&WellKnownName<'static>>
-    where UniqueName<'static>: Borrow<Q> {
+    where
+        UniqueName<'static>: Borrow<Q>,
+    {
         self.names.get(uniq)
     }
 
@@ -175,7 +179,9 @@ impl PlayerMap {
     }
 
     pub fn remove<Q: Hash + Eq + std::fmt::Debug>(&mut self, bus: &Q) -> Option<Player>
-    where WellKnownName<'static>: Borrow<Q> {
+    where
+        WellKnownName<'static>: Borrow<Q>,
+    {
         if let Some(old_player) = self.players.remove(bus) {
             trace!("Removing player from map: {bus:?}");
 
@@ -204,14 +210,13 @@ impl PlayerMap {
             bus: WellKnownName<'static>,
         ) -> Result<()> {
             if !this.players.contains_key(&bus) {
-                assert!(
-                    this.put(
+                assert!(this
+                    .put(
                         Player::new(now, bus, conn)
                             .await
                             .context("Error constructing a new player")?,
                     )
-                    .is_none()
-                );
+                    .is_none());
             }
 
             Ok(())

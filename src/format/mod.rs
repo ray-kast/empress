@@ -38,7 +38,9 @@ impl<'a> From<NomError<&'a str>> for Error {
 }
 
 impl<'a> From<ParseError<lexer::Token<'a>>> for Error {
-    fn from(e: ParseError<lexer::Token>) -> Self { Self::Parse(e.map_token(|t| format!("{t:?}"))) }
+    fn from(e: ParseError<lexer::Token>) -> Self {
+        Self::Parse(e.map_token(|t| format!("{t:?}")))
+    }
 }
 
 pub fn eval(fmt: impl AsRef<str>, values: impl serde::Serialize) -> Result<String, Error> {

@@ -36,7 +36,14 @@ impl TryFrom<PlayerStatus> for NowPlayingResult {
     type Error = Error;
 
     fn try_from(status: PlayerStatus) -> Result<Self> {
-        let PlayerStatus { kind, bus, ident, status, position, mut metadata } = status;
+        let PlayerStatus {
+            kind,
+            bus,
+            ident,
+            status,
+            position,
+            mut metadata,
+        } = status;
 
         let (bus, id, position) = match kind {
             PlayerStatusKind::NoPlayer => (None, None, None),
