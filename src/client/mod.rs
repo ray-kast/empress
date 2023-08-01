@@ -1,6 +1,7 @@
 use std::{future::Future, io, time::Duration};
 
 use anyhow::{Context, Error};
+use futures_util::StreamExt;
 use log::{info, trace, warn};
 use serde::Serialize;
 use zbus::ConnectionBuilder;
@@ -8,21 +9,23 @@ use zbus::ConnectionBuilder;
 use self::proxy::EmpressProxy;
 use crate::{
     format,
-    server::{mpris, mpris::player::PlaybackStatus, PlayerStatus, PlayerStatusKind},
+    server::{
+        self, mpris, mpris::player::PlaybackStatus, MatchPlayer, PlayerStatus, PlayerStatusKind,
+    },
     timeout::Timeout,
-    ClientCommand, Offset, Result, SERVER_NAME,
+    ClientCommand, Offset, PlayerOpts, Result, SERVER_NAME,
 };
 
 mod proxy;
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct NowPlayingPlayer {
     bus: Option<String>,
     id: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct NowPlayingResult {
     status: PlaybackStatus,
@@ -78,7 +81,24 @@ impl TryFrom<PlayerStatus> for NowPlayingResult {
     }
 }
 
-#[allow(clippy::too_many_lines)] // Not really much to do about this...
+impl MatchPlayer for NowPlayingResult {
+    fn bus(&self) -> &str {
+        self.player.bus.as_ref().map_or("", |s| s)
+    }
+
+    fn status(&self) -> PlaybackStatus {
+        self.status
+    }
+}
+
+macro_rules! courtesy_line {
+    () => {
+        if ::atty::is(::atty::Stream::Stdout) {
+            println!();
+        }
+    };
+}
+
 pub(super) async fn run(cmd: ClientCommand) -> Result {
     let conn = ConnectionBuilder::session()
         .context("Error creatihng session connection builder")?
@@ -108,21 +128,27 @@ pub(super) async fn run(cmd: ClientCommand) -> Result {
             }
         },
         ClientCommand::Next(opts) => {
+            let opts = opts.into();
             try_send(&proxy, |p| p.next(&opts)).await?;
         },
         ClientCommand::Previous(opts) => {
+            let opts = opts.into();
             try_send(&proxy, |p| p.prev(&opts)).await?;
         },
         ClientCommand::Pause(opts) => {
+            let opts = opts.into();
             try_send(&proxy, |p| p.pause(&opts)).await?;
         },
         ClientCommand::PlayPause(opts) => {
+            let opts = opts.into();
             try_send(&proxy, |p| p.play_pause(&opts)).await?;
         },
         ClientCommand::Stop(opts) => {
+            let opts = opts.into();
             try_send(&proxy, |p| p.stop(&opts)).await?;
         },
         ClientCommand::Play(opts) => {
+            let opts = opts.into();
             try_send(&proxy, |p| p.play(&opts)).await?;
         },
         ClientCommand::ListPlayers => {
@@ -132,58 +158,44 @@ pub(super) async fn run(cmd: ClientCommand) -> Result {
                 println!("{player}\t{status}");
             }
         },
-        ClientCommand::NowPlaying { player, format } => {
-            let resp = try_send(&proxy, |p| p.player_status(&player)).await?;
-
-            trace!("Full now-playing response: {resp:?}");
-
-            let resp: NowPlayingResult = resp.try_into()?;
-
-            if let Some(format) = format {
-                print!("{}", format::eval(format, resp)?);
-            } else {
-                serde_json::to_writer(io::stdout(), &resp)?;
-            }
-
-            if atty::is(atty::Stream::Stdout) {
-                println!();
-            }
-        },
+        ClientCommand::NowPlaying {
+            player,
+            format,
+            watch,
+        } => now_playing(proxy, player, format, watch).await?,
         ClientCommand::Seek {
             player,
             to: Offset::Relative(to),
         } => {
+            let player = player.into();
             try_send(&proxy, |p| p.seek_relative(&player, to)).await?;
         },
         ClientCommand::Seek {
             player,
             to: Offset::Absolute(to),
         } => {
+            let player = player.into();
             try_send(&proxy, |p| p.seek_absolute(&player, to)).await?;
         },
         ClientCommand::Volume {
             player,
             vol: Offset::Relative(to),
         } => {
+            let player = player.into();
             let vol = try_send(&proxy, |p| p.vol_relative(&player, to)).await?;
 
             print!("{vol}");
-
-            if atty::is(atty::Stream::Stdout) {
-                println!();
-            }
+            courtesy_line!();
         },
         ClientCommand::Volume {
             player,
             vol: Offset::Absolute(to),
         } => {
+            let player = player.into();
             let vol = try_send(&proxy, |p| p.vol_absolute(&player, to)).await?;
 
             print!("{vol}");
-
-            if atty::is(atty::Stream::Stdout) {
-                println!();
-            }
+            courtesy_line!();
         },
         ClientCommand::SwitchCurrent { to, no_play } => {
             let switch_playing = !no_play;
@@ -194,11 +206,86 @@ pub(super) async fn run(cmd: ClientCommand) -> Result {
     Ok(())
 }
 
+async fn now_playing(
+    proxy: Timeout<EmpressProxy<'_>>,
+    player: PlayerOpts,
+    format: Option<String>,
+    watch: bool,
+) -> Result {
+    let player = player.into();
+
+    let status = try_send(&proxy, |p| async {
+        if player == server::PlayerOpts::default() {
+            p.now_playing().await
+        } else {
+            p.player_status(&player).await
+        }
+    })
+    .await?;
+
+    let format = format.as_deref();
+    let mut last = print_now_playing(status, format, |_| true)?.1;
+
+    if watch {
+        println!();
+
+        let player = player.build().context("Invalid player filter options")?;
+        let mut stream = proxy
+            .run(
+                Duration::from_secs(1),
+                EmpressProxy::receive_now_playing_changed,
+            )
+            .await
+            .context("Error getting now-playing status")?;
+
+        while let Some(s) = stream.next().await {
+            let val = s.get().await.context("Error parsing property value")?;
+
+            trace!("Full now-playing response: {val:?}");
+
+            let (skip, val) = print_now_playing(val, format, |v| *v != last && player.is_match(v))?;
+            if skip {
+                continue;
+            }
+
+            println!();
+
+            last = val;
+        }
+    } else {
+        courtesy_line!();
+    }
+
+    Ok(())
+}
+
+fn print_now_playing(
+    resp: PlayerStatus,
+    format: Option<&str>,
+    f: impl FnOnce(&NowPlayingResult) -> bool,
+) -> Result<(bool, NowPlayingResult)> {
+    trace!("Full now-playing response: {resp:?}");
+
+    let resp: NowPlayingResult = resp.try_into()?;
+
+    if !f(&resp) {
+        return Ok((true, resp));
+    }
+
+    if let Some(format) = format {
+        print!("{}", format::eval(format, &resp)?);
+    } else {
+        serde_json::to_writer(io::stdout(), &resp)?;
+    }
+
+    Ok((false, resp))
+}
+
 async fn try_send<
     'a,
-    T,
-    F: Fn(&'a T) -> FR + Copy + 'a,
-    FR: Future<Output = zbus::fdo::Result<R>>,
+    T: 'a,
+    F: Fn(&'a T) -> FR,
+    FR: Future<Output = zbus::fdo::Result<R>> + 'a,
     R,
 >(
     with: &'a Timeout<T>,
@@ -209,7 +296,7 @@ async fn try_send<
     let mut i = 0;
 
     loop {
-        match with.try_run(Duration::from_secs(2), call).await {
+        match with.try_run(Duration::from_secs(2), &call).await {
             Err(e) if i < MAX_TRIES => warn!("Request failed: {e}"),
             r => break r.context("Unable to contact empress server"),
         }

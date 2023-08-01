@@ -21,7 +21,7 @@ impl<T> From<T> for Timeout<T> {
 
 impl<T> Timeout<T> {
     #[inline]
-    pub fn block<F: FnOnce(&T) -> R, R>(&self, f: F) -> R {
+    pub fn block<F: FnOnce(&'_ T) -> R, R>(&self, f: F) -> R {
         f(&self.0)
     }
 
@@ -31,7 +31,7 @@ impl<T> Timeout<T> {
     }
 
     #[inline]
-    pub async fn run<'a, F: FnOnce(&'a T) -> FR + 'a, FR: Future>(
+    pub async fn run<'a, F: FnOnce(&'a T) -> FR, FR: Future + 'a>(
         &'a self,
         duration: time::Duration,
         f: F,
@@ -43,7 +43,7 @@ impl<T> Timeout<T> {
     }
 
     #[inline]
-    pub async fn try_run<'a, F: FnOnce(&'a T) -> FR + 'a, FR: Future<Output = Result<R, E>>, R, E>(
+    pub async fn try_run<'a, F: FnOnce(&'a T) -> FR, FR: Future<Output = Result<R, E>> + 'a, R, E>(
         &'a self,
         duration: time::Duration,
         f: F,

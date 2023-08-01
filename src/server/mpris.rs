@@ -61,7 +61,7 @@ pub trait Player {
 pub mod player {
     use zbus::{
         names::OwnedInterfaceName,
-        zvariant::{Error as VariantError, OwnedValue},
+        zvariant::{self, Error as VariantError, OwnedValue},
     };
 
     use super::{lazy_static, NAME_PREFIX};
@@ -79,12 +79,13 @@ pub mod player {
         Eq,
         PartialOrd,
         Ord,
+        Hash,
         Default,
         strum::EnumString,
         strum::Display,
         serde::Serialize,
         serde::Deserialize,
-        zbus::zvariant::Type,
+        zvariant::Type,
     )]
     #[serde(into = "String", try_from = "String")]
     #[zvariant(signature = "s")]
@@ -93,6 +94,27 @@ pub mod player {
         Paused,
         #[default]
         Stopped,
+    }
+
+    impl<'a> TryFrom<zvariant::Value<'a>> for PlaybackStatus {
+        type Error = zvariant::Error;
+
+        fn try_from(value: zvariant::Value<'a>) -> Result<Self, Self::Error> {
+            let s: zvariant::Str = value.try_into()?;
+
+            s.parse().map_err(|e: strum::ParseError| {
+                zvariant::Error::InputOutput(std::sync::Arc::new(std::io::Error::new(
+                    std::io::ErrorKind::Other,
+                    e,
+                )))
+            })
+        }
+    }
+
+    impl<'a> From<PlaybackStatus> for zvariant::Value<'a> {
+        fn from(value: PlaybackStatus) -> Self {
+            value.to_string().into()
+        }
     }
 
     impl From<PlaybackStatus> for String {

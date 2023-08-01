@@ -10,6 +10,7 @@ use zbus::{
 use super::{
     mpris,
     mpris::{player::PlaybackStatus, MediaPlayerProxy, PlayerProxy},
+    MatchPlayer,
 };
 use crate::{timeout::Timeout, Offset, Result};
 
@@ -26,7 +27,7 @@ async fn timeout<
     'a,
     T: 'a,
     F: FnOnce(&'a T) -> FR + 'a,
-    FR: std::future::Future<Output = Result<R, E>>,
+    FR: std::future::Future<Output = Result<R, E>> + 'a,
     R,
     E,
 >(
@@ -382,5 +383,18 @@ impl Player {
         } else {
             Some((self, vol))
         })
+    }
+}
+
+impl MatchPlayer for Player {
+    fn bus(&self) -> &str {
+        self.bus()
+            .strip_prefix(mpris::BUS_NAME.as_str())
+            .and_then(|s| s.strip_prefix('.'))
+            .unwrap_or("")
+    }
+
+    fn status(&self) -> PlaybackStatus {
+        self.status
     }
 }

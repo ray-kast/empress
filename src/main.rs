@@ -13,9 +13,6 @@
 //! README](https://github.com/ray-kast/empress/blob/master/README.md) for more
 //! details.
 
-// TODO: implement PlayerOpts
-// TODO: convert now-playing to a property
-
 use std::{
     fmt,
     fmt::{Display, Formatter},
@@ -25,11 +22,10 @@ use anyhow::{anyhow, Context, Error};
 use clap::Parser;
 use lazy_static::lazy_static;
 use log::{error, LevelFilter};
-use server::mpris::player::PlaybackStatus;
 use tokio::runtime::Builder as RtBuilder;
 use zbus::{
     names::{OwnedInterfaceName, OwnedWellKnownName},
-    zvariant::{self, OwnedObjectPath},
+    zvariant::OwnedObjectPath,
 };
 
 mod client;
@@ -104,9 +100,16 @@ enum ClientCommand {
         player: PlayerOpts,
 
         /// Instead of outputting JSON, output a plaintext string with the given
-        /// format.  See the full help for this command for a syntax reference.
+        /// format - see the full help for this command for a syntax reference
         #[arg(short, long)]
         format: Option<String>,
+
+        // TODO: pretty sure watch should conflict with any player filters being
+        //       set
+        /// Continue watching for changes to playback status and printing
+        /// updates
+        #[arg(short, long)]
+        watch: bool,
     },
     /// Skip one track backwards
     Previous(PlayerOpts),
@@ -155,17 +158,62 @@ enum ClientCommand {
     },
 }
 
-/// Options for filtering the search set of players for the daemon
-#[derive(
-    Debug, Clone, clap::Args, zvariant::SerializeDict, zvariant::DeserializeDict, zvariant::Type,
-)]
-#[zvariant(signature = "dict")]
-pub struct PlayerOpts {
-    #[arg(long, short)]
-    name: Option<String>,
+/// The current status of a player
+#[derive(Debug, Clone, Copy, clap::ValueEnum)]
+pub enum PlaybackStatus {
+    /// Indicates a player actively playing media
+    Playing,
+    /// Indicates a player with media loaded but not playing
+    Paused,
+    /// Indicates a fully-stopped player
+    Stopped,
+}
 
+impl From<PlaybackStatus> for server::mpris::player::PlaybackStatus {
+    fn from(value: PlaybackStatus) -> Self {
+        use server::mpris::player;
+
+        match value {
+            PlaybackStatus::Playing => player::PlaybackStatus::Playing,
+            PlaybackStatus::Paused => player::PlaybackStatus::Paused,
+            PlaybackStatus::Stopped => player::PlaybackStatus::Stopped,
+        }
+    }
+}
+
+/// Options for filtering the search set of players for the daemon
+#[derive(Debug, Clone, clap::Args)]
+pub struct PlayerOpts {
+    /// Select players whose bus names match the given regular expression
+    #[arg(short, long, conflicts_with("ibus"))]
+    bus: Option<String>,
+
+    /// Select players whose bus names match the given regular expression, ignoring case
+    #[arg(short, long, conflicts_with("bus"))]
+    ibus: Option<String>,
+
+    /// Select players whose state matches one of the given states
     #[arg(long, use_value_delimiter(true))]
     state: Vec<PlaybackStatus>,
+}
+
+impl From<PlayerOpts> for server::PlayerOpts {
+    fn from(value: PlayerOpts) -> Self {
+        let PlayerOpts { bus, ibus, state } = value;
+
+        let (bus, ignore_bus_case) = match (bus, ibus) {
+            (None, None) => (String::new(), false),
+            (Some(i), None) => (i, false),
+            (None, Some(i)) => (i, true),
+            (Some(_), Some(_)) => unreachable!(),
+        };
+
+        server::PlayerOpts {
+            bus,
+            ignore_bus_case,
+            states: state.into_iter().map(Into::into).collect(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy)]

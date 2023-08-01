@@ -1,7 +1,11 @@
-use std::{collections::HashMap, fmt};
+use std::{
+    collections::{HashMap, HashSet},
+    fmt,
+};
 
 use anyhow::{Context, Error};
 use log::{error, info};
+use regex::{Regex, RegexBuilder};
 use server::Server;
 use tokio::{
     select,
@@ -23,15 +27,84 @@ mod player_map;
 #[allow(clippy::module_inception)] // I'm aware, but the struct is called Server
 mod server;
 
-#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize, zvariant::Type)]
-pub enum PlayerStatusKind {
-    #[default]
-    NoPlayer,
-    NoPosition,
+#[derive(
+    Debug,
+    Clone,
     Default,
+    PartialEq,
+    zvariant::SerializeDict,
+    zvariant::DeserializeDict,
+    zvariant::Type,
+)]
+#[zvariant(signature = "dict")]
+pub struct PlayerOpts {
+    pub bus: String,
+    pub ignore_bus_case: bool,
+    pub states: Vec<PlaybackStatus>,
 }
 
-#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize, zvariant::Type)]
+impl PlayerOpts {
+    pub fn build(&self) -> Result<PlayerMatcher> {
+        let Self {
+            bus,
+            ignore_bus_case,
+            states,
+        } = self;
+
+        Ok(PlayerMatcher {
+            bus: RegexBuilder::new(bus)
+                .case_insensitive(*ignore_bus_case)
+                .build()
+                .context("Invalid regular expression")?,
+            states: states.iter().copied().collect(),
+        })
+    }
+}
+
+pub trait MatchPlayer {
+    fn bus(&self) -> &str;
+    fn status(&self) -> PlaybackStatus;
+}
+
+pub struct PlayerMatcher {
+    bus: Regex,
+    states: HashSet<PlaybackStatus>,
+}
+
+impl PlayerMatcher {
+    pub fn is_match(&self, p: &impl MatchPlayer) -> bool {
+        self.bus.is_match(p.bus()) && (self.states.is_empty() || self.states.contains(&p.status()))
+    }
+}
+
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    Default,
+    serde::Serialize,
+    serde::Deserialize,
+    zvariant::Type,
+    zvariant::Value,
+    zvariant::OwnedValue,
+)]
+pub enum PlayerStatusKind {
+    #[default]
+    NoPlayer = 0,
+    NoPosition = 1,
+    Default = 2,
+}
+
+#[derive(
+    Debug,
+    Clone,
+    Default,
+    serde::Serialize,
+    serde::Deserialize,
+    zvariant::Type,
+    zvariant::Value,
+    zvariant::OwnedValue,
+)]
 pub struct PlayerStatus {
     pub kind: PlayerStatusKind,
     pub bus: String,
@@ -62,7 +135,7 @@ pub async fn run() -> Result {
         .await
         .context("Error connecting to D-Bus")?;
 
-    let (srv, join) = Server::new(conn.clone()).await?;
+    let (srv, join) = Server::new(conn.clone(), SERVER_PATH.as_ref()).await?;
     let created = conn
         .object_server()
         .at(&*SERVER_PATH, srv)
