@@ -51,9 +51,9 @@ fn hmss_usec(mut us: i64, neg_zero: bool) -> String {
     min %= 60;
 
     if hr > 0 {
-        write!(s, "{:01}:{:02}:{:02}", hr, min, sec).unwrap();
+        write!(s, "{hr:01}:{min:02}:{sec:02}").unwrap();
     } else {
-        write!(s, "{:01}:{:02}", min, sec).unwrap();
+        write!(s, "{min:01}:{sec:02}").unwrap();
     }
 
     s
@@ -134,11 +134,13 @@ fn json(inp: Input) -> Output {
     let (_ctx, Topic(Any(v)), ()) = inp.try_into()?;
 
     Ok(Owned(Value::String(
-        serde_json::to_string(v.as_ref()).context("Failed to serialize JSON")?,
+        serde_json::to_string(v.as_ref()).context("Error serializing JSON")?,
     )))
 }
 
-fn lower(inp: Input) -> Output { stream_str(inp, |s| s.to_lowercase()) }
+fn lower(inp: Input) -> Output {
+    stream_str(inp, |s| s.to_lowercase())
+}
 
 fn shorten(inp: Input) -> Output {
     let (_ctx, Topic(Any(val)), (Number::<usize>(len), (Any(ell), ()))) = inp.try_into()?;
@@ -222,9 +224,13 @@ fn time(inp: Input) -> Output {
     Ok(Owned(Value::String(hmss_usec(len, false))))
 }
 
-fn trim(inp: Input) -> Output { stream_str(inp, |s| s.trim().to_owned()) }
+fn trim(inp: Input) -> Output {
+    stream_str(inp, |s| s.trim().to_owned())
+}
 
-fn upper(inp: Input) -> Output { stream_str(inp, |s| s.to_uppercase()) }
+fn upper(inp: Input) -> Output {
+    stream_str(inp, |s| s.to_uppercase())
+}
 
 fn xml(inp: Input) -> Output {
     lazy_static::lazy_static! {

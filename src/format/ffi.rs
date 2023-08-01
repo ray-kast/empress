@@ -34,7 +34,7 @@ pub type Result<T> = std::result::Result<T, Error>;
 pub type Output<'a> = Result<CowValue<'a>>;
 pub type Function = for<'a> fn(Input<'a>) -> Output<'a>;
 
-#[allow(missing_debug_implementations)]
+#[derive(Debug)]
 pub struct Input<'a> {
     ctx: &'a Context,
     topic: Option<CowValue<'a>>,
@@ -156,7 +156,9 @@ pub struct Any<'a>(pub CowValue<'a>);
 impl<'a> TryFrom<CowValue<'a>> for Any<'a> {
     type Error = Error;
 
-    fn try_from(val: CowValue<'a>) -> Result<Self> { Ok(Self(val)) }
+    fn try_from(val: CowValue<'a>) -> Result<Self> {
+        Ok(Self(val))
+    }
 }
 
 pub struct Array<'a>(pub Cow<'a, Vec<Value>>);

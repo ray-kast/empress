@@ -133,7 +133,9 @@ fn btag(val: &'static str, b: Bit<'static>) -> impl for<'a> Fn(&'a str) -> BResu
     }
 }
 
-fn any1(s: &str) -> IResult<&str, &str> { s.split_at_position1_complete(|_| true, ErrorKind::Char) }
+fn any1(s: &str) -> IResult<&str, &str> {
+    s.split_at_position1_complete(|_| true, ErrorKind::Char)
+}
 
 // Adapted from split_at_position1_complete
 fn split_before<'a, O, E>(
@@ -141,10 +143,12 @@ fn split_before<'a, O, E>(
     mut parser: impl nom::Parser<&'a str, O, E>,
 ) -> impl FnMut(&'a str) -> IResult<&'a str, &'a str> {
     #[allow(clippy::unnecessary_wraps)]
+    #[inline]
     unsafe fn ok(s: &str, i: usize) -> IResult<&str, &str> {
         Ok((s.get_unchecked(i..), s.get_unchecked(..i)))
     }
 
+    #[inline]
     fn err(input: &str) -> IResult<&str, &str> {
         Err(nom::Err::Error(nom::error::Error {
             input,
@@ -268,10 +272,12 @@ fn space(s: &str) -> BResult {
 
 fn ident(s: &str) -> BResult {
     #[allow(clippy::unnecessary_wraps)]
+    #[inline]
     unsafe fn ok(s: &str, i: usize) -> BResult {
         Ok(bit(s.get_unchecked(i..), s.get_unchecked(..i), Bit::Ident))
     }
 
+    #[inline]
     fn err(input: &str) -> BResult {
         Err(nom::Err::Error(nom::error::Error {
             input,
@@ -288,7 +294,11 @@ fn ident(s: &str) -> BResult {
                 c.is_alphanumeric()
             };
 
-        if matches { None } else { Some(i) }
+        if matches {
+            None
+        } else {
+            Some(i)
+        }
     }) {
         Some(0) => err(s),
         // char_indices() returns a byte index that is already
@@ -314,7 +324,7 @@ fn int(s: &str) -> BResult {
 fn float(s: &str) -> BResult {
     let (s2, (l, c, r)) = tuple((digit1, char('.'), digit1))(s)?;
 
-    try_bit(s, s2, &format!("{}{}{}", l, c, r), |t| {
+    try_bit(s, s2, &format!("{l}{c}{r}"), |t| {
         Number::from_str(t).map(Bit::Number)
     })
 }

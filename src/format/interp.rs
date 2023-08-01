@@ -1,6 +1,6 @@
 use std::{
     borrow::Cow,
-    fmt::{Debug, Write},
+    fmt::{self, Debug, Write},
 };
 
 use serde_json::Map;
@@ -13,7 +13,7 @@ pub(super) fn json(value: &Value) -> String {
 
 pub(super) fn assert_no_topic<D: Debug>(topic: &Option<CowValue>, d: &D) -> Result<()> {
     match topic {
-        Some(_) => Err(Error::ExtraTopic(format!("{:?}", d))),
+        Some(_) => Err(Error::ExtraTopic(format!("{d:?}"))),
         None => Ok(()),
     }
 }
@@ -29,7 +29,7 @@ pub(super) fn is_null_like(val: &Value) -> bool {
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
-    #[error("Failed to write format output")]
+    #[error("Error writing format output")]
     Stream(#[source] StreamError),
     #[error("Unexpected pipe input when evaluating {0}")]
     ExtraTopic(String),
@@ -48,23 +48,32 @@ pub enum Error {
 #[derive(Debug, thiserror::Error)]
 pub enum StreamError {
     #[error("An I/O error occurred")]
-    Io(#[from] std::fmt::Error),
+    Io(#[from] fmt::Error),
     #[error("Cannot format {} as a string", json(.0))]
     Unprintable(Value),
 }
 
 impl<T: Into<StreamError>> From<T> for Error {
-    fn from(err: T) -> Self { Self::Stream(err.into()) }
+    fn from(err: T) -> Self {
+        Self::Stream(err.into())
+    }
 }
 
 pub type Result<T, E = Error> = std::result::Result<T, E>;
 pub use serde_json::Value;
 pub type CowValue<'a> = Cow<'a, Value>;
 
-#[allow(missing_debug_implementations)]
 pub struct Context {
     pub values: Map<String, Value>,
     pub functions: Functions,
+}
+
+impl Debug for Context {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Context")
+            .field("values", &self.values)
+            .finish_non_exhaustive()
+    }
 }
 
 pub trait Eval<'a> {
@@ -99,7 +108,7 @@ impl Stream<'static> for &Value {
     fn stream(self, (): (), mut out: impl Write) -> Result<(), StreamError> {
         match self {
             Value::Null => Ok(()),
-            Value::Number(n) => out.write_fmt(format_args!("{}", n)).map_err(Into::into),
+            Value::Number(n) => out.write_fmt(format_args!("{n}")).map_err(Into::into),
             Value::String(s) => out.write_str(s).map_err(Into::into),
             Value::Bool(_) | Value::Array(_) | Value::Object(_) => {
                 Err(StreamError::Unprintable(self.clone()))
@@ -116,7 +125,8 @@ pub trait StreamAll<'a>: IntoIterator {
 }
 
 impl<'a, T: Stream<'a>, I: IntoIterator<Item = T>> StreamAll<'a> for I
-where T::Context: Clone
+where
+    T::Context: Clone,
 {
     type Context = T::Context;
     type Error = T::Error;

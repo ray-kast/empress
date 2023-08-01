@@ -1,7 +1,7 @@
 [package]
 name = "empress"
-version = "1.6.0"
-authors = ["rookie1024 <rookie1286@gmail.com>"]
+version = "2.0.0"
+authors = ["raykast <me@ryan-s.net>"]
 edition = "2021"
 description = "A D-Bus MPRIS daemon for controlling media players."
 documentation = "https://docs.rs/empress"
@@ -18,24 +18,35 @@ opt-level = 3
 lto = "thin"
 
 [dependencies]
-anyhow = "1.0.55"
+anyhow = "1.0.72"
+async-trait = "0.1.72"
 atty = "0.2.14"
-clap = { version = "3.1.2", features = ["derive"] }
-dbus = "0.9.5"
-dbus-crossroads = "0.5.0"
-dbus-tokio = "0.7.5"
-env_logger = "0.9.0"
-futures = "0.3.21"
-lalrpop-util = { version = "0.19.7", features = ["lexer"] }
+clap = { version = "4.3.19", features = ["derive"] }
+dispose = "0.5.0"
+env_logger = "0.10.0"
+futures-util = "0.3.28"
+lalrpop-util = { version = "0.20.0", features = ["lexer"] }
 lazy_static = "1.4.0"
-log = "0.4.14"
-nom = "7.1.0"
-regex = "1.5.4"
-serde = { version = "1.0.136", features = ["derive"] }
-serde_json = "1.0.79"
-strum = { version = "0.24.0", features = ["derive"] }
-thiserror = "1.0.30"
-tokio = { version = "1.17.0", features = ["macros", "rt", "signal", "sync"] }
+log = "0.4.19"
+nom = "7.1.3"
+regex = "1.9.1"
+serde = { version = "1.0.179", features = ["derive"] }
+serde_json = "1.0.104"
+strum = { version = "0.25.0", features = ["derive"] }
+thiserror = "1.0.44"
+zbus = { version = "3.14.1", default-features = false, features = ["tokio"] }
+
+[dependencies.tokio]
+version = "1.29.1"
+features = [
+  "macros",
+  "net",
+  "parking_lot",
+  "rt",
+  "signal",
+  "sync",
+  "time",
+]
 
 [build-dependencies]
-lalrpop = "0.19.7"
+lalrpop = "0.19.8"

@@ -1,6 +1,8 @@
 #![deny(
+    clippy::disallowed_methods,
     clippy::suspicious,
     clippy::style,
+    clippy::clone_on_ref_ptr,
     rustdoc::broken_intra_doc_links,
     missing_debug_implementations,
     missing_copy_implementations
@@ -21,111 +23,93 @@ use clap::Parser;
 use lazy_static::lazy_static;
 use log::{error, LevelFilter};
 use tokio::runtime::Builder as RtBuilder;
+use zbus::{
+    names::{OwnedInterfaceName, OwnedWellKnownName},
+    zvariant::OwnedObjectPath,
+};
 
 mod client;
 mod format;
 mod server;
+mod timeout;
 
 type Result<T = (), E = Error> = std::result::Result<T, E>;
 
 #[cfg(debug_assertions)]
 lazy_static! {
     static ref NAME_PREFIX: String = format!("net.ryan_s.debug.{}", *API_IDENT);
-    static ref PATH_PREFIX: String = format!("/net/ryan_s/debug/{}", *API_IDENT);
 }
 
 #[cfg(not(debug_assertions))]
 lazy_static! {
     static ref NAME_PREFIX: String = format!("net.ryan_s.{}", *API_IDENT);
-    static ref PATH_PREFIX: String = format!("/net/ryan_s/{}", *API_IDENT);
 }
 
 lazy_static! {
+    static ref PATH_PREFIX: String = format!("/net/ryan_s/{}", *API_IDENT);
+
     static ref API_IDENT: String = format!("Empress{}", env!("CARGO_PKG_VERSION_MAJOR"));
-    static ref INTERFACE_NAME: String = format!("{}.Daemon", *NAME_PREFIX);
-    static ref SERVER_NAME: String = NAME_PREFIX.clone();
-    static ref SERVER_PATH: String = format!("{}/Daemon", *PATH_PREFIX);
-}
-
-pub(crate) mod metadata {
-    pub const PLAYER_BUS: &str = "empress:playerBus";
-    pub const PLAYER_IDENTITY: &str = "empress:playerIdentity";
-    pub const POSITION: &str = "empress:position";
-}
-
-#[derive(Debug, Clone, Copy, strum::Display)]
-enum MethodId {
-    /// List the players currently tracked by the daemon
-    ListPlayers,
-    /// Skip one track forwards
-    Next,
-    /// Print information about the current track
-    NowPlaying,
-    /// Skip one track backwards
-    Previous,
-    /// Pause a currently-playing player
-    Pause,
-    /// Like pause if a player is playing, otherwise like play
-    PlayPause,
-    /// Stop a currently-playing player
-    Stop,
-    /// Play a currently-paused player
-    Play,
-    /// Seek to a relative position on a player
-    SeekRelative,
-    /// Seek to an absolute position on a player
-    SeekAbsolute,
-    /// Set a player's volume relative to its current volume
-    VolRelative,
-    /// Set a player's volume to an absolute value
-    VolAbsolute,
-    /// Move a player to the top of the priority list, optionally pausing all
-    /// other players and playing the selected one
-    SwitchCurrent,
+    // Interface name is non-negotiable, so don't add a .debug prefix
+    static ref INTERFACE_NAME: OwnedInterfaceName = format!("net.ryan_s.{}.Daemon", *API_IDENT)
+        .try_into()
+        .unwrap();
+    static ref SERVER_NAME: OwnedWellKnownName = NAME_PREFIX.as_str().try_into().unwrap();
+    static ref SERVER_PATH: OwnedObjectPath =
+        format!("{}/Daemon", *PATH_PREFIX).try_into().unwrap();
 }
 
 #[derive(Parser)]
+#[command(author, about, version)]
 enum Opts {
     /// Launch a D-Bus service abstracting MPRIS players
     Server {
         /// Disable info logs (enabled by default if stderr is not a TTY)
-        #[clap(short, long)]
+        #[arg(short, long)]
         quiet: bool,
 
         /// Enable info logs, even if stderr is not a TTY
-        #[clap(long, conflicts_with("quiet"))]
+        #[arg(long, conflicts_with("quiet"))]
         no_quiet: bool,
 
         /// Output extra information to the console
-        #[clap(
+        #[arg(
             short,
             long,
-            parse(from_occurrences),
+            action(clap::ArgAction::Count),
             conflicts_with("quiet"),
-            conflicts_with("no-quiet")
+            conflicts_with("no_quiet")
         )]
-        verbose: usize,
+        verbose: u8,
     },
-    #[clap(flatten)]
+    #[command(flatten)]
     Client(ClientCommand),
 }
 
-#[derive(Debug, Clone, Parser)]
+#[derive(Debug, Clone, clap::Subcommand)]
 enum ClientCommand {
+    /// Scan for any player updates the daemon missed
+    Scan,
     /// List the players currently tracked by the daemon
     ListPlayers,
     /// Skip one track forwards
     Next(PlayerOpts),
     /// Print information about the current track
-    #[clap(long_about = include_str!("../etc/now_playing_long.txt"))]
+    #[command(long_about = include_str!("../etc/now_playing_long.txt"))]
     NowPlaying {
-        #[clap(flatten)]
+        #[command(flatten)]
         player: PlayerOpts,
 
         /// Instead of outputting JSON, output a plaintext string with the given
-        /// format.  See the full help for this command for a syntax reference.
-        #[clap(short, long)]
+        /// format - see the full help for this command for a syntax reference
+        #[arg(short, long)]
         format: Option<String>,
+
+        // TODO: pretty sure watch should conflict with any player filters being
+        //       set
+        /// Continue watching for changes to playback status and printing
+        /// updates
+        #[arg(short, long)]
+        watch: bool,
     },
     /// Skip one track backwards
     Previous(PlayerOpts),
@@ -139,7 +123,7 @@ enum ClientCommand {
     Play(PlayerOpts),
     /// Seek to a position on a player
     Seek {
-        #[clap(flatten)]
+        #[command(flatten)]
         player: PlayerOpts,
 
         /// The position to seek to, either absolute (e.g. 5) or relative (e.g.
@@ -148,13 +132,13 @@ enum ClientCommand {
     },
     /// Get or set the volume on a player
     Volume {
-        #[clap(flatten)]
+        #[command(flatten)]
         player: PlayerOpts,
 
         /// The volume as a number between 0.0 and 1.0, either absolute (e.g.
         /// 0.5) or relative (e.g. 0.1+ or 0.1-).  If no value is given
         /// the current volume is simply printed instead.
-        #[clap(default_value_t = Offset::Relative(0.0))]
+        #[arg(default_value_t = Offset::Relative(0.0))]
         vol: Offset,
     },
     /// Bump the priority of a specific player
@@ -169,45 +153,68 @@ enum ClientCommand {
         /// By default switch-current will pause any currently running players
         /// and play the selected player.  Pass this flag to disable
         /// this behavior.
-        #[clap(short, long)]
+        #[arg(short, long)]
         no_play: bool,
     },
 }
 
-impl ClientCommand {
-    pub fn id(&self) -> MethodId {
-        match self {
-            Self::ListPlayers => MethodId::ListPlayers,
-            Self::Next(..) => MethodId::Next,
-            Self::NowPlaying { .. } => MethodId::NowPlaying,
-            Self::Previous(..) => MethodId::Previous,
-            Self::Pause(..) => MethodId::Pause,
-            Self::PlayPause(..) => MethodId::PlayPause,
-            Self::Stop(..) => MethodId::Stop,
-            Self::Play(..) => MethodId::Play,
-            Self::Seek {
-                to: Offset::Relative(..),
-                ..
-            } => MethodId::SeekRelative,
-            Self::Seek {
-                to: Offset::Absolute(..),
-                ..
-            } => MethodId::SeekAbsolute,
-            Self::Volume {
-                vol: Offset::Relative(..),
-                ..
-            } => MethodId::VolRelative,
-            Self::Volume {
-                vol: Offset::Absolute(..),
-                ..
-            } => MethodId::VolAbsolute,
-            Self::SwitchCurrent { .. } => MethodId::SwitchCurrent,
+/// The current status of a player
+#[derive(Debug, Clone, Copy, clap::ValueEnum)]
+pub enum PlaybackStatus {
+    /// Indicates a player actively playing media
+    Playing,
+    /// Indicates a player with media loaded but not playing
+    Paused,
+    /// Indicates a fully-stopped player
+    Stopped,
+}
+
+impl From<PlaybackStatus> for server::mpris::player::PlaybackStatus {
+    fn from(value: PlaybackStatus) -> Self {
+        use server::mpris::player;
+
+        match value {
+            PlaybackStatus::Playing => player::PlaybackStatus::Playing,
+            PlaybackStatus::Paused => player::PlaybackStatus::Paused,
+            PlaybackStatus::Stopped => player::PlaybackStatus::Stopped,
         }
     }
 }
 
-#[derive(Debug, Clone, Parser)]
-struct PlayerOpts {} // WARNING: DO NOT TOUCH WITHOUT INCREMENTING MAJOR VERSION
+/// Options for filtering the search set of players for the daemon
+#[derive(Debug, Clone, clap::Args)]
+pub struct PlayerOpts {
+    /// Select players whose bus names match the given regular expression
+    #[arg(short, long, conflicts_with("ibus"))]
+    bus: Option<String>,
+
+    /// Select players whose bus names match the given regular expression, ignoring case
+    #[arg(short, long, conflicts_with("bus"))]
+    ibus: Option<String>,
+
+    /// Select players whose state matches one of the given states
+    #[arg(long, use_value_delimiter(true))]
+    state: Vec<PlaybackStatus>,
+}
+
+impl From<PlayerOpts> for server::PlayerOpts {
+    fn from(value: PlayerOpts) -> Self {
+        let PlayerOpts { bus, ibus, state } = value;
+
+        let (bus, ignore_bus_case) = match (bus, ibus) {
+            (None, None) => (String::new(), false),
+            (Some(i), None) => (i, false),
+            (None, Some(i)) => (i, true),
+            (Some(_), Some(_)) => unreachable!(),
+        };
+
+        server::PlayerOpts {
+            bus,
+            ignore_bus_case,
+            states: state.into_iter().map(Into::into).collect(),
+        }
+    }
+}
 
 #[derive(Debug, Clone, Copy)]
 enum Offset {
@@ -227,7 +234,7 @@ impl Display for Offset {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
         let offs = self.offset();
         assert!(offs.is_sign_positive());
-        write!(f, "{}", offs)?;
+        write!(f, "{offs}")?;
 
         if matches!(self, Self::Relative(..)) {
             f.write_str(if offs.is_sign_negative() { "-" } else { "+" })?;
@@ -248,7 +255,7 @@ impl ::std::str::FromStr for Offset {
         }
 
         if let Some(caps) = SEEK_PATTERN.captures(s) {
-            let time: f64 = caps[1].parse().context("invalid number for offset")?;
+            let time: f64 = caps[1].parse().context("Invalid number for offset")?;
 
             Ok(match caps.get(2).map(|c| c.as_str()) {
                 Some("-") => Offset::Relative(-time),
@@ -257,21 +264,23 @@ impl ::std::str::FromStr for Offset {
                 None => Offset::Absolute(time),
             })
         } else {
-            Err(anyhow!("invalid format for seek position"))
+            Err(anyhow!("Invalid format for seek position"))
         }
     }
 }
 
-fn log_init(v: usize, f: impl FnOnce(&mut env_logger::Builder)) -> Result {
+fn log_init(v: u8, f: impl FnOnce(&mut env_logger::Builder)) -> Result {
     const VERBOSITY: [LevelFilter; 3] = [LevelFilter::Info, LevelFilter::Debug, LevelFilter::Trace];
     #[cfg(debug_assertions)]
-    const DEFAULT_V: usize = 1;
+    const DEFAULT_V: u8 = 1;
     #[cfg(not(debug_assertions))]
-    const DEFAULT_V: usize = 0;
+    const DEFAULT_V: u8 = 0;
 
     let mut b = env_logger::builder();
 
-    b.filter_level(VERBOSITY[(DEFAULT_V + v).min(VERBOSITY.len() - 1)]);
+    b.filter_level(
+        VERBOSITY[usize::from(DEFAULT_V.saturating_add(v)).min(VERBOSITY.len().saturating_sub(1))],
+    );
 
     f(&mut b);
 
@@ -286,7 +295,7 @@ fn main() {
         Err(e) => {
             log_init(0, |_| ()).ok();
 
-            error!("{:?}", e);
+            error!("{e:?}");
         },
     }
 }
@@ -295,7 +304,7 @@ fn run() -> Result {
     let rt = RtBuilder::new_current_thread()
         .enable_all()
         .build()
-        .context("failed to start runtime")?;
+        .context("Error starting async runtime")?;
 
     let opts = Opts::parse();
 

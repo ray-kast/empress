@@ -18,13 +18,13 @@ type ParseError<T> = lalrpop_util::ParseError<lexer::Pos, T, &'static str>;
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
-    #[error("Failed to parse format string")]
+    #[error("Error parsing format string")]
     Lex(#[from] NomError<String>),
-    #[error("Failed to parse format string")]
+    #[error("Error parsing format string")]
     Parse(#[from] ParseError<String>),
-    #[error("Failed to load context into the interpreter")]
+    #[error("Error loading context into the interpreter")]
     Values(#[from] anyhow::Error),
-    #[error("Failed to evaluate format string")]
+    #[error("Error evaluating format string")]
     Interpret(#[from] interp::Error),
 }
 
@@ -39,7 +39,7 @@ impl<'a> From<NomError<&'a str>> for Error {
 
 impl<'a> From<ParseError<lexer::Token<'a>>> for Error {
     fn from(e: ParseError<lexer::Token>) -> Self {
-        Self::Parse(e.map_token(|t| format!("{:?}", t)))
+        Self::Parse(e.map_token(|t| format!("{t:?}")))
     }
 }
 
@@ -47,18 +47,17 @@ pub fn eval(fmt: impl AsRef<str>, values: impl serde::Serialize) -> Result<Strin
     use interp::StreamAll;
 
     let toks = lexer::scan(fmt.as_ref());
-    log::trace!("{:?}", toks);
+    log::trace!("{toks:?}");
     let toks = toks?;
 
     let ast = parser::FormatParser::new().parse(toks);
-    log::trace!("{:?}", ast);
+    log::trace!("{ast:?}");
     let ast = ast?;
 
     let values = match serde_json::to_value(values) {
         Ok(serde_json::Value::Object(m)) => Ok(m),
         Ok(v) => Err(Error::Values(anyhow::anyhow!(
-            "Value provided was not a JSON map ({:?})",
-            v
+            "Value provided was not a JSON map ({v:?})",
         ))),
         Err(e) => Err(Error::Values(e.into())),
     }?;
