@@ -2,13 +2,13 @@ use zbus::fdo;
 
 use crate::server::{PlayerList, PlayerOpts, PlayerStatus};
 
-#[zbus::dbus_proxy(
+#[zbus::proxy(
     interface = "club.bnuy.Empress.Daemon",
     default_service = "club.bnuy.Empress",
     default_path = "/club/bnuy/Empress/Daemon"
 )]
-trait Empress {
-    #[dbus_proxy(property)]
+pub trait Empress {
+    #[zbus(property)]
     fn now_playing(&self) -> fdo::Result<PlayerStatus>;
 
     fn scan(&self) -> fdo::Result<Vec<String>>;
@@ -42,28 +42,31 @@ trait Empress {
 
 #[cfg(test)]
 mod tests {
-    use zbus::ProxyDefault;
+    use zbus::{names::{BusName, InterfaceName}, proxy::Defaults, zvariant::ObjectPath};
 
     use super::EmpressProxy;
 
     #[test]
     fn test_interface() {
-        assert_eq!(EmpressProxy::INTERFACE, crate::INTERFACE_NAME.as_str());
+        assert_eq!(
+            EmpressProxy::INTERFACE.as_ref().map(InterfaceName::as_str),
+            Some(crate::INTERFACE_NAME.as_str())
+        );
     }
 
     #[test]
     fn test_destination() {
         assert_eq!(
-            EmpressProxy::DESTINATION,
-            crate::SERVER_NAME.replace(".debug.", ".")
+            EmpressProxy::DESTINATION.as_ref().map(BusName::as_str),
+            Some(crate::SERVER_NAME.replace(".debug.", ".").as_str())
         );
     }
 
     #[test]
     fn test_path() {
         assert_eq!(
-            EmpressProxy::PATH,
-            crate::SERVER_PATH.replace("/debug/", "/")
+            EmpressProxy::PATH.as_ref().map(ObjectPath::as_str),
+            Some(crate::SERVER_PATH.replace("/debug/", "/").as_str())
         );
     }
 }

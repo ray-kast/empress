@@ -91,13 +91,13 @@ enum Bit<'a> {
 type SizedBit<'a> = (usize, Bit<'a>);
 type BResult<'a, E = nom::error::Error<&'a str>> = IResult<&'a str, SizedBit<'a>, E>;
 
-//// Entry point
+//////// Entry point
 
 pub fn scan(s: &str) -> Result<Vec<SpannedTok>, nom::error::Error<&str>> {
     tokens(s).finish().map(|(_, v)| v)
 }
 
-//// Helpers
+//////// Helpers
 
 #[inline]
 fn bit<'a, 'b>(
@@ -182,7 +182,7 @@ fn split_before<'a, O, E>(
     }
 }
 
-//// Lexer internals
+//////// Lexer internals
 
 fn tokens(s: &str) -> IResult<&str, Vec<SpannedTok>> {
     let (s, r) = many0(token())(s)?;

@@ -18,26 +18,25 @@ opt-level = 3
 lto = "thin"
 
 [dependencies]
-anyhow = "1.0.72"
-async-trait = "0.1.72"
-atty = "0.2.14"
-clap = { version = "4.3.19", features = ["derive"] }
-dispose = "0.5.0"
-env_logger = "0.10.0"
-futures-util = "0.3.28"
-lalrpop-util = { version = "0.20.0", features = ["lexer"] }
-lazy_static = "1.4.0"
-log = "0.4.19"
+anyhow = "1.0.91"
+async-trait = "0.1.83"
+clap = { version = "4.5.20", features = ["derive"] }
+dispose = { version = "0.5.1", git = "https://github.com/ray-kast/dispose", rev = "56cf752" }
+env_logger = "0.11.5"
+futures-util = "0.3.31"
+lalrpop-util = { version = "0.22.0", features = ["lexer"] }
+lazy_static = "1.5.0"
+log = "0.4.22"
 nom = "7.1.3"
-regex = "1.9.1"
-serde = { version = "1.0.179", features = ["derive"] }
-serde_json = "1.0.104"
-strum = { version = "0.25.0", features = ["derive"] }
-thiserror = "1.0.44"
-zbus = { version = "3.14.1", default-features = false, features = ["tokio"] }
+regex = "1.11.1"
+serde = { version = "1.0.213", features = ["derive"] }
+serde_json = "1.0.132"
+strum = { version = "0.26.3", features = ["derive"] }
+thiserror = "1.0.65"
+zbus = { version = "5.0.1", default-features = false, features = ["tokio"] }
 
 [dependencies.tokio]
-version = "1.29.1"
+version = "1.41.0"
 features = [
   "macros",
   "net",
@@ -49,4 +48,4 @@ features = [
 ]
 
 [build-dependencies]
-lalrpop = "0.19.8"
+lalrpop = "0.22.0"

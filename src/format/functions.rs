@@ -34,7 +34,7 @@ pub fn all() -> Functions {
     .collect()
 }
 
-//// Helper functions
+//////// Helper functions
 
 fn hmss_usec(mut us: i64, neg_zero: bool) -> String {
     let mut s = String::new();
@@ -97,14 +97,14 @@ fn shorten_len(s: &str, ellipsis: &str, max_len: usize) -> Result<Option<Shorten
     })
 }
 
-//// Format function definitions
+//////// Format function definitions
 
 fn compact(inp: Input) -> Output {
     let (_ctx, Topic(Array(arr)), ()) = inp.try_into()?;
 
     Ok(Owned(match arr {
         Owned(a) => a.into_iter().filter(|e| !is_null_like(e)).collect(),
-        Borrowed(a) => a.iter().cloned().filter(|e| !is_null_like(e)).collect(),
+        Borrowed(a) => a.iter().filter(|e| !is_null_like(e)).cloned().collect(),
     }))
 }
 

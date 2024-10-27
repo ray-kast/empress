@@ -14,8 +14,8 @@
 //! details.
 
 use std::{
-    fmt,
-    fmt::{Display, Formatter},
+    fmt::{self, Display, Formatter},
+    io::IsTerminal,
 };
 
 use anyhow::{anyhow, Context, Error};
@@ -315,7 +315,7 @@ fn run() -> Result {
             verbose,
         } => {
             log_init(verbose, |b| {
-                if !(no_quiet || verbose != 0 || atty::is(atty::Stream::Stderr)) || quiet {
+                if !(no_quiet || verbose != 0 || std::io::stderr().is_terminal()) || quiet {
                     b.filter_level(LevelFilter::Warn);
                 }
             })

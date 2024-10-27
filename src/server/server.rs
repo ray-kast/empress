@@ -11,8 +11,9 @@ use tokio::{
 use zbus::{
     fdo::{self, DBusProxy},
     names::{BusName, OwnedInterfaceName, UniqueName, WellKnownName},
-    zvariant::{ObjectPath, Value},
-    Connection, MatchRule, Message, SignalContext,
+    object_server::SignalEmitter,
+    zvariant::{ObjectPath, OwnedValue, Value},
+    Connection, MatchRule, Message,
 };
 
 use super::{
@@ -76,7 +77,7 @@ impl Server {
         };
 
         let ctx =
-            SignalContext::new(&conn, path).context("Error creating scanner signal context")?;
+            SignalEmitter::new(&conn, path).context("Error creating scanner signal context")?;
 
         let scanner_handle = this.clone().spawn_background_scanner(ctx, stop_rx).await?;
         this.run_scan(conn, false, None).await?;
@@ -96,9 +97,10 @@ impl Server {
         }
     }
 
-    fn filter_prop_changed(msg: &Message) -> Option<(HashMap<String, Value>, Vec<String>)> {
-        let iface = msg.interface();
-        let memb = msg.member();
+    fn filter_prop_changed(msg: &Message) -> Option<(HashMap<String, OwnedValue>, Vec<String>)> {
+        let hdr = msg.header();
+        let iface = hdr.interface();
+        let memb = hdr.member();
 
         if iface.map_or(true, |i| i != "org.freedesktop.DBus.Properties")
             || memb.map_or(true, |m| m != "PropertiesChanged")
@@ -107,7 +109,10 @@ impl Server {
         }
 
         let (iface, changed, invalidated) =
-            match msg.body::<(OwnedInterfaceName, HashMap<String, Value>, Vec<String>)>() {
+            match msg
+                .body()
+                .deserialize::<(OwnedInterfaceName, HashMap<String, OwnedValue>, Vec<String>)>()
+            {
                 Ok(b) => b,
                 Err(e) => {
                     debug!("Error deserializing possible PropertiesChanged event: {e}");
@@ -125,12 +130,12 @@ impl Server {
 
     async fn spawn_background_scanner(
         self,
-        ctx: SignalContext<'static>,
+        ctx: SignalEmitter<'static>,
         stop_rx: mpsc::Receiver<()>,
     ) -> Result<JoinHandle<()>> {
         // TODO: can this be narrowed down further?
         let mr = MatchRule::builder()
-            .msg_type(zbus::MessageType::Signal)
+            .msg_type(zbus::message::Type::Signal)
             .interface("org.freedesktop.DBus.Properties")
             .unwrap()
             .member("PropertiesChanged")
@@ -164,14 +169,14 @@ impl Server {
 
     async fn background_scanner(
         self,
-        ctx: SignalContext<'_>,
+        ctx: SignalEmitter<'_>,
         mut stop_rx: mpsc::Receiver<()>,
         mut matcher: SignalMatcher<'_>,
         mut msgs: zbus::MessageStream,
-        mut owner_changed: zbus::fdo::NameOwnerChangedStream<'_>,
+        mut owner_changed: zbus::fdo::NameOwnerChangedStream,
     ) {
         enum Event {
-            Message(Result<Arc<Message>, zbus::Error>),
+            Message(Result<Message, zbus::Error>),
             OwnerChanged(fdo::NameOwnerChanged),
         }
 
@@ -264,20 +269,17 @@ impl Server {
     async fn handle_property_changed(
         &self,
         msg: &Message,
-        (changed, invalidated): (HashMap<String, Value<'_>>, Vec<String>),
+        (changed, invalidated): (HashMap<String, OwnedValue>, Vec<String>),
     ) -> Result<bool> {
-        let header = msg.header().context("Invalid message header")?;
+        let header = msg.header();
 
-        let sender = header
-            .sender()
-            .context("Invalid message sender")?
-            .ok_or_else(|| anyhow!("Message had no sender"))?;
+        let sender = header.sender().context("Message had no sender")?;
 
         let players = self.shared.players.read().await;
 
         let sender = players
             .resolve(&sender.to_owned())
-            .ok_or_else(|| anyhow!("Unexpected bus name"))?
+            .context("Unexpected bus name")?
             .to_owned();
 
         drop(players);
@@ -297,9 +299,10 @@ impl Server {
                             let player = players.remove(&sender)?;
 
                             let val: PlaybackStatus = val
-                                .downcast_ref::<str>()?
-                                .parse()
-                                .map_err(|e| warn!("Error parsing playback status: {e}"))
+                                .downcast_ref::<&str>()
+                                .context("Error downcasting playback status")
+                                .and_then(|s| s.parse().context("Error parsing playback status"))
+                                .map_err(|e| warn!("{e:?}"))
                                 .ok()?;
 
                             Some((players, player, val))
@@ -550,13 +553,12 @@ impl Server {
         self.peek_player_with(opts, |p| async move {
             let metadata = p.metadata().await?;
 
-            let has_track =
-                metadata
-                    .get(mpris::track_list::ATTR_TRACKID)
-                    .map_or(false, |v| match v.into() {
-                        Value::ObjectPath(p) => p != mpris::track_list::NO_TRACK.as_ref(),
-                        _ => false,
-                    });
+            let has_track = metadata
+                .get(mpris::track_list::ATTR_TRACKID)
+                .map_or(false, |v| match **v {
+                    Value::ObjectPath(ref p) => *p != mpris::track_list::NO_TRACK.as_ref(),
+                    _ => false,
+                });
 
             let bus = p
                 .bus()
@@ -589,9 +591,9 @@ impl Server {
     }
 }
 
-#[zbus::dbus_interface(name = "club.bnuy.Empress.Daemon")]
+#[zbus::interface(name = "club.bnuy.Empress.Daemon")]
 impl Server {
-    #[dbus_interface(property)]
+    #[zbus(property)]
     pub async fn now_playing(&self) -> fdo::Result<PlayerStatus> {
         self.handle_method(
             self.peek_player_status(PlayerOpts::default()),
@@ -697,7 +699,7 @@ impl Server {
         self.handle_method(
             {
                 self.process_player_with(opts, |p| p.try_seek(Offset::Relative(to)))
-                    .map(|p| p?.ok_or_else(|| anyhow!("No players available to seek")))
+                    .map(|p| p?.context("No players available to seek"))
             },
             "Error seeking player",
         )
@@ -708,7 +710,7 @@ impl Server {
         self.handle_method(
             {
                 self.process_player_with(opts, |p| p.try_seek(Offset::Absolute(to)))
-                    .map(|p| p?.ok_or_else(|| anyhow!("No players available to seek")))
+                    .map(|p| p?.context("No players available to seek"))
             },
             "Error seeking player",
         )
@@ -719,7 +721,7 @@ impl Server {
         self.handle_method(
             {
                 self.process_player_with(opts, |p| p.try_set_volume(Offset::Relative(to)))
-                    .map(|p| p?.ok_or_else(|| anyhow!("No players available to get/adjust volume")))
+                    .map(|p| p?.context("No players available to get/adjust volume"))
             },
             "Error getting/adjusting player volume",
         )
@@ -730,7 +732,7 @@ impl Server {
         self.handle_method(
             {
                 self.process_player_with(opts, |p| p.try_set_volume(Offset::Absolute(to)))
-                    .map(|p| p?.ok_or_else(|| anyhow!("No players available to set volume")))
+                    .map(|p| p?.context("No players available to set volume"))
             },
             "Error setting player volume",
         )
@@ -787,7 +789,7 @@ impl Server {
 
 #[cfg(test)]
 mod tests {
-    use zbus::Interface;
+    use zbus::object_server::Interface;
 
     #[test]
     fn test_interface() {

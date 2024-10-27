@@ -1,6 +1,7 @@
 use std::{
     collections::{HashMap, HashSet},
     fmt,
+    io::IsTerminal,
 };
 
 use anyhow::{Context, Error};
@@ -12,9 +13,9 @@ use tokio::{
     signal::{unix, unix::SignalKind},
 };
 use zbus::{
+    connection,
     fdo::{Error as ZError, Result as ZResult},
     zvariant::{self, OwnedValue},
-    ConnectionBuilder,
 };
 
 use self::mpris::player::PlaybackStatus;
@@ -95,9 +96,9 @@ pub enum PlayerStatusKind {
     Default = 2,
 }
 
+// !Clone because of OwnedValue
 #[derive(
     Debug,
-    Clone,
     Default,
     serde::Serialize,
     serde::Deserialize,
@@ -116,10 +117,10 @@ pub struct PlayerStatus {
 
 pub type PlayerList = Vec<(String, PlaybackStatus)>;
 
-pub(self) use player::Player;
-pub(self) use player_map::PlayerMap;
+use player::Player;
+use player_map::PlayerMap;
 
-pub(self) fn method_err(e: impl Into<Error>, msg: impl fmt::Display) -> ZError {
+fn method_err(e: impl Into<Error>, msg: impl fmt::Display) -> ZError {
     let msg = msg.to_string();
     error!(
         "Method handler returned an error: {:?}",
@@ -129,7 +130,7 @@ pub(self) fn method_err(e: impl Into<Error>, msg: impl fmt::Display) -> ZError {
 }
 
 pub async fn run() -> Result {
-    let conn = ConnectionBuilder::session()
+    let conn = connection::Builder::session()
         .context("Error creating connection builder")?
         .build()
         .await
@@ -158,7 +159,7 @@ pub async fn run() -> Result {
     select!(
         Some(()) = hup.recv() => (),
         Some(()) = int.recv() => {
-            if atty::is(atty::Stream::Stdin) && atty::is(atty::Stream::Stderr) {
+            if std::io::stdin().is_terminal() && std::io::stderr().is_terminal() {
                 eprintln!();
             }
         }

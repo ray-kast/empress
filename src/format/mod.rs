@@ -12,7 +12,7 @@ mod __parser {
     lalrpop_util::lalrpop_mod!(pub parser, "/format/parser.rs");
 }
 
-pub(self) use __parser::parser;
+use __parser::parser;
 
 type ParseError<T> = lalrpop_util::ParseError<lexer::Pos, T, &'static str>;
 

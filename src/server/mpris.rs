@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use lazy_static::lazy_static;
 use zbus::{
-    dbus_proxy, fdo,
+    fdo,
     names::OwnedBusName,
     zvariant::{ObjectPath, OwnedObjectPath, OwnedValue},
 };
@@ -12,16 +12,16 @@ lazy_static! {
     pub static ref BUS_NAME: OwnedBusName = NAME_PREFIX.as_str().try_into().unwrap();
 }
 
-#[dbus_proxy(
+#[zbus::proxy(
     interface = "org.mpris.MediaPlayer2",
     default_path = "/org/mpris/MediaPlayer2"
 )]
 pub trait MediaPlayer {
-    #[dbus_proxy(property)]
+    #[zbus(property)]
     fn identity(&self) -> fdo::Result<String>;
 }
 
-#[dbus_proxy(
+#[zbus::proxy(
     interface = "org.mpris.MediaPlayer2.Player",
     default_path = "/org/mpris/MediaPlayer2"
 )]
@@ -34,27 +34,27 @@ pub trait Player {
     fn play(&self) -> fdo::Result<()>;
     fn set_position(&self, track: ObjectPath<'_>, pos: i64) -> fdo::Result<()>;
 
-    #[dbus_proxy(property)]
+    #[zbus(property)]
     fn playback_status(&self) -> fdo::Result<player::PlaybackStatus>;
-    #[dbus_proxy(property)]
+    #[zbus(property)]
     fn metadata(&self) -> fdo::Result<HashMap<String, OwnedValue>>;
-    #[dbus_proxy(property)]
+    #[zbus(property)]
     fn volume(&self) -> fdo::Result<f64>;
-    #[dbus_proxy(property)]
+    #[zbus(property)]
     fn set_volume(&self, vol: f64) -> fdo::Result<()>;
-    #[dbus_proxy(property)]
+    #[zbus(property)]
     fn position(&self) -> fdo::Result<i64>;
-    #[dbus_proxy(property)]
+    #[zbus(property)]
     fn can_go_next(&self) -> fdo::Result<bool>;
-    #[dbus_proxy(property)]
+    #[zbus(property)]
     fn can_go_previous(&self) -> fdo::Result<bool>;
-    #[dbus_proxy(property)]
+    #[zbus(property)]
     fn can_play(&self) -> fdo::Result<bool>;
-    #[dbus_proxy(property)]
+    #[zbus(property)]
     fn can_pause(&self) -> fdo::Result<bool>;
-    #[dbus_proxy(property)]
+    #[zbus(property)]
     fn can_seek(&self) -> fdo::Result<bool>;
-    #[dbus_proxy(property)]
+    #[zbus(property)]
     fn can_control(&self) -> fdo::Result<bool>;
 }
 
@@ -136,8 +136,7 @@ pub mod player {
 
         fn try_from(value: OwnedValue) -> Result<Self, Self::Error> {
             value
-                .downcast_ref::<str>()
-                .ok_or(VariantError::IncorrectType)?
+                .downcast_ref::<&str>()?
                 .parse()
                 .map_err(|e: strum::ParseError| VariantError::Message(e.to_string()))
         }

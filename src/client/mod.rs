@@ -1,10 +1,11 @@
+use std::io::IsTerminal;
 use std::{future::Future, io, time::Duration};
 
 use anyhow::{Context, Error};
 use futures_util::StreamExt;
 use log::{info, trace, warn};
 use serde::Serialize;
-use zbus::ConnectionBuilder;
+use zbus::connection;
 
 use self::proxy::EmpressProxy;
 use crate::{
@@ -93,14 +94,14 @@ impl MatchPlayer for NowPlayingResult {
 
 macro_rules! courtesy_line {
     () => {
-        if ::atty::is(::atty::Stream::Stdout) {
+        if std::io::stdout().is_terminal() {
             println!();
         }
     };
 }
 
 pub(super) async fn run(cmd: ClientCommand) -> Result {
-    let conn = ConnectionBuilder::session()
+    let conn = connection::Builder::session()
         .context("Error creatihng session connection builder")?
         .build()
         .await

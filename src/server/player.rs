@@ -19,7 +19,7 @@ pub(super) struct Player {
     status: PlaybackStatus,
     last_update: Instant,
     mp2: Timeout<MediaPlayerProxy<'static>>,
-    player: Timeout<PlayerProxy<'static>>,
+    inner: Timeout<PlayerProxy<'static>>,
 }
 
 #[inline]
@@ -53,7 +53,7 @@ impl Player {
                 .await
                 .context("Error building MediaPlayer2 proxy")?
                 .into(),
-            player: PlayerProxy::builder(conn)
+            inner: PlayerProxy::builder(conn)
                 .destination(name)
                 .context("Error setting player proxy destination")?
                 .build()
@@ -112,8 +112,8 @@ impl Player {
 
     #[inline]
     pub fn bus(&self) -> &WellKnownName {
-        let player_dest = unsafe { self.player.smuggle(|p| p.destination()) };
-        debug_assert!(self.mp2.block(|m| m.destination() == player_dest));
+        let player_dest = unsafe { self.inner.smuggle(|p| p.inner().destination()) };
+        debug_assert!(self.mp2.block(|m| m.inner().destination() == player_dest));
         match player_dest {
             BusName::Unique(u) => unreachable!("MPRIS bus had unique name {:?}", u.as_str()),
             BusName::WellKnown(w) => w,
@@ -123,7 +123,7 @@ impl Player {
     //////// Methods under MediaPlayer2.Player ////////
 
     pub async fn next(self) -> Result<Self> {
-        timeout(&self.player, PlayerProxy::next)
+        timeout(&self.inner, PlayerProxy::next)
             .await
             .context("Proxy call for Next failed")?;
 
@@ -134,7 +134,7 @@ impl Player {
     }
 
     pub async fn previous(self) -> Result<Self> {
-        timeout(&self.player, PlayerProxy::previous)
+        timeout(&self.inner, PlayerProxy::previous)
             .await
             .context("Proxy call for Previous failed")?;
 
@@ -145,7 +145,7 @@ impl Player {
     }
 
     pub async fn pause(self) -> Result<Self> {
-        timeout(&self.player, PlayerProxy::pause)
+        timeout(&self.inner, PlayerProxy::pause)
             .await
             .context("Proxy call for Pause failed")?;
 
@@ -157,7 +157,7 @@ impl Player {
     }
 
     pub async fn stop(self) -> Result<Self> {
-        timeout(&self.player, PlayerProxy::stop)
+        timeout(&self.inner, PlayerProxy::stop)
             .await
             .context("Proxy call for Stop failed")?;
 
@@ -169,7 +169,7 @@ impl Player {
     }
 
     pub async fn play(self) -> Result<Self> {
-        timeout(&self.player, PlayerProxy::play)
+        timeout(&self.inner, PlayerProxy::play)
             .await
             .context("Proxy call for Play failed")?;
 
@@ -182,7 +182,7 @@ impl Player {
 
     #[allow(clippy::cast_possible_truncation)]
     pub async fn set_position(self, id: ObjectPath<'_>, secs: i64) -> Result<Self> {
-        timeout(&self.player, |p| p.set_position(id, secs))
+        timeout(&self.inner, |p| p.set_position(id, secs))
             .await
             .context("Proxy call for SetPosition failed")?;
 
@@ -203,67 +203,67 @@ impl Player {
     //////// Properties under MediaPlayer2.Player ////////
 
     pub async fn playback_status(&self) -> Result<PlaybackStatus> {
-        timeout(&self.player, PlayerProxy::playback_status)
+        timeout(&self.inner, PlayerProxy::playback_status)
             .await
             .context("Proxy property get for PlaybackStatus failed")
     }
 
     pub async fn metadata(&self) -> Result<HashMap<String, OwnedValue>> {
-        timeout(&self.player, PlayerProxy::metadata)
+        timeout(&self.inner, PlayerProxy::metadata)
             .await
             .context("Proxy property get for Metadata failed")
     }
 
     pub async fn volume(&self) -> Result<f64> {
-        timeout(&self.player, PlayerProxy::volume)
+        timeout(&self.inner, PlayerProxy::volume)
             .await
             .context("Proxy property get for Volume failed")
     }
 
     pub async fn set_volume(&self, vol: f64) -> Result<()> {
-        timeout(&self.player, |p| p.set_volume(vol))
+        timeout(&self.inner, |p| p.set_volume(vol))
             .await
             .context("Proxy property set for Volume failed")
     }
 
     pub async fn position(&self) -> Result<i64> {
-        timeout(&self.player, PlayerProxy::position)
+        timeout(&self.inner, PlayerProxy::position)
             .await
             .context("Proxy property get for Position failed")
     }
 
     pub async fn can_go_next(&self) -> Result<bool> {
-        timeout(&self.player, PlayerProxy::can_go_next)
+        timeout(&self.inner, PlayerProxy::can_go_next)
             .await
             .context("Proxy property get for CanGoNext failed")
     }
 
     pub async fn can_go_previous(&self) -> Result<bool> {
-        timeout(&self.player, PlayerProxy::can_go_previous)
+        timeout(&self.inner, PlayerProxy::can_go_previous)
             .await
             .context("Proxy property get for CanGoPrevious failed")
     }
 
     pub async fn can_play(&self) -> Result<bool> {
-        timeout(&self.player, PlayerProxy::can_play)
+        timeout(&self.inner, PlayerProxy::can_play)
             .await
             .context("Proxy property get for CanPlay failed")
     }
 
     pub async fn can_pause(&self) -> Result<bool> {
-        timeout(&self.player, PlayerProxy::can_pause)
+        timeout(&self.inner, PlayerProxy::can_pause)
             .await
             .context("Proxy property get for CanPause failed")
     }
 
     pub async fn can_seek(&self) -> Result<bool> {
-        timeout(&self.player, PlayerProxy::can_seek)
+        timeout(&self.inner, PlayerProxy::can_seek)
             .await
             .context("Proxy property get for CanSeek failed")
     }
 
     pub async fn can_control(&self) -> Result<bool> {
-        timeout(&self.player, PlayerProxy::can_control)
+        timeout(&self.inner, PlayerProxy::can_control)
             .await
             .context("Proxy property get for CanControl failed")
     }
@@ -336,10 +336,9 @@ impl Player {
             Some((
                 self.set_position(
                     meta.get(mpris::track_list::ATTR_TRACKID)
-                        .ok_or_else(|| anyhow!("Missing track ID in metadata"))?
-                        .downcast_ref::<ObjectPath>()
-                        .map(ObjectPath::as_ref)
-                        .ok_or_else(|| anyhow!("Track ID wasn't a valid path"))?,
+                        .context("Missing track ID in metadata")?
+                        .downcast_ref::<&ObjectPath>()
+                        .map(ObjectPath::as_ref)?,
                     pos,
                 )
                 .await?,
