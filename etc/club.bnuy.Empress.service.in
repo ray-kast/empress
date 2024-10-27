@@ -1,7 +1,7 @@
 # D-Bus service file for empress
 
 [D-BUS Service]
-Name=net.ryan_s.Empress2
+Name=club.bnuy.Empress
 Exec=/path/to/empress server
 SystemdService=empress.service
 

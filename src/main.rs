@@ -37,20 +37,20 @@ type Result<T = (), E = Error> = std::result::Result<T, E>;
 
 #[cfg(debug_assertions)]
 lazy_static! {
-    static ref NAME_PREFIX: String = format!("net.ryan_s.debug.{}", *API_IDENT);
+    static ref NAME_PREFIX: String = format!("club.bnuy.debug.{}", *API_IDENT);
 }
 
 #[cfg(not(debug_assertions))]
 lazy_static! {
-    static ref NAME_PREFIX: String = format!("net.ryan_s.{}", *API_IDENT);
+    static ref NAME_PREFIX: String = format!("club.bnuy.{}", *API_IDENT);
 }
 
 lazy_static! {
-    static ref PATH_PREFIX: String = format!("/net/ryan_s/{}", *API_IDENT);
+    static ref PATH_PREFIX: String = format!("/club/bnuy/{}", *API_IDENT);
 
     static ref API_IDENT: String = format!("Empress{}", env!("CARGO_PKG_VERSION_MAJOR"));
     // Interface name is non-negotiable, so don't add a .debug prefix
-    static ref INTERFACE_NAME: OwnedInterfaceName = format!("net.ryan_s.{}.Daemon", *API_IDENT)
+    static ref INTERFACE_NAME: OwnedInterfaceName = format!("club.bnuy.{}.Daemon", *API_IDENT)
         .try_into()
         .unwrap();
     static ref SERVER_NAME: OwnedWellKnownName = NAME_PREFIX.as_str().try_into().unwrap();

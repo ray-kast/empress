@@ -59,7 +59,7 @@ for part in major minor rev extra; do
   typeset ver_$part="$(jq -r .$part <<<"$version")"
 done
 
-service=net.ryan_s.Empress$ver_major
+service=club.bnuy.Empress$ver_major
 systemd_file=empress.service
 dbus_file=$service.service
 

@@ -7,7 +7,7 @@ PartOf=graphical-session.target
 
 [Service]
 Type=dbus
-BusName=net.ryan_s.Empress2
+BusName=club.bnuy.Empress
 ExecStart=/path/to/empress server
 
 # vim:set ft=systemd:

@@ -1,7 +1,7 @@
 [package]
 name = "empress"
-version = "2.0.0"
-authors = ["raykast <me@ryan-s.net>"]
+version = "3.0.0"
+authors = ["raykast <me@june-s.net>"]
 edition = "2021"
 description = "A D-Bus MPRIS daemon for controlling media players."
 documentation = "https://docs.rs/empress"

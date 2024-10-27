@@ -589,7 +589,7 @@ impl Server {
     }
 }
 
-#[zbus::dbus_interface(name = "net.ryan_s.Empress2.Daemon")]
+#[zbus::dbus_interface(name = "club.bnuy.Empress.Daemon")]
 impl Server {
     #[dbus_interface(property)]
     pub async fn now_playing(&self) -> fdo::Result<PlayerStatus> {

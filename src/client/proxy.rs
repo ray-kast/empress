@@ -3,9 +3,9 @@ use zbus::fdo;
 use crate::server::{PlayerList, PlayerOpts, PlayerStatus};
 
 #[zbus::dbus_proxy(
-    interface = "net.ryan_s.Empress2.Daemon",
-    default_service = "net.ryan_s.Empress2",
-    default_path = "/net/ryan_s/Empress2/Daemon"
+    interface = "club.bnuy.Empress.Daemon",
+    default_service = "club.bnuy.Empress",
+    default_path = "/club/bnuy/Empress/Daemon"
 )]
 trait Empress {
     #[dbus_proxy(property)]
