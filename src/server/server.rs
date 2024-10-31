@@ -793,6 +793,6 @@ mod tests {
 
     #[test]
     fn test_interface() {
-        assert_eq!(super::Server::name(), crate::INTERFACE_NAME.as_ref());
+        assert_eq!(super::Server::name(), crate::INTERFACE_ID.as_ref());
     }
 }

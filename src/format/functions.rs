@@ -2,6 +2,7 @@ use std::{
     borrow::Cow::{Borrowed, Owned},
     collections::HashMap,
     fmt::Write,
+    sync::LazyLock,
 };
 
 use anyhow::Context;
@@ -233,19 +234,19 @@ fn upper(inp: Input) -> Output {
 }
 
 fn xml(inp: Input) -> Output {
-    lazy_static::lazy_static! {
-        static ref ENTITY_RE: Regex = Regex::new(r#"['"\&<>]"#).unwrap();
+    static ENTITY_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r#"['"\&<>]"#).unwrap());
 
-        static ref REPLACE_MAP: HashMap<&'static str, &'static str> = vec![
-                ("'", "apos"),
-                ("\"", "quot"),
-                ("&", "amp"),
-                ("<", "lt"),
-                (">", "gt"),
-            ]
-            .into_iter()
-            .collect();
-    }
+    static REPLACE_MAP: LazyLock<HashMap<&'static str, &'static str>> = LazyLock::new(|| {
+        vec![
+            ("'", "apos"),
+            ("\"", "quot"),
+            ("&", "amp"),
+            ("<", "lt"),
+            (">", "gt"),
+        ]
+        .into_iter()
+        .collect()
+    });
 
     stream_str(inp, |s| {
         match ENTITY_RE.replace_all(&s, |c: &regex::Captures| {

@@ -52,14 +52,12 @@ fi
 
 cd "$(dirname "$0")/.."
 
-version="$(cargo read-manifest --manifest-path Cargo.toml | jq -r \
-  '.version | capture("^(?<major>\\d+)\\.(?<minor>\\d+)\\.(?<rev>\\d+)(?<extra>.*)$")')"
+service="$(awk '/cfg\(not\(debug_assertions\)\)/,EOF { print }' src/main.rs \
+  | sed -nre 's/^.*const.*SERVER_NAME_STR.*=.*"(.*)".*$/\1/p')"
 
-for part in major minor rev extra; do
-  typeset ver_$part="$(jq -r .$part <<<"$version")"
-done
+# Assert the real service name matches the expected output of this script
+[[ "$service" == 'club.bnuy.Empress' ]]
 
-service=club.bnuy.Empress$ver_major
 systemd_file=empress.service
 dbus_file=$service.service
 

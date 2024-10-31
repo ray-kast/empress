@@ -1,16 +1,14 @@
-use std::collections::HashMap;
+use std::{collections::HashMap, sync::LazyLock};
 
-use lazy_static::lazy_static;
 use zbus::{
     fdo,
     names::OwnedBusName,
     zvariant::{ObjectPath, OwnedObjectPath, OwnedValue},
 };
 
-lazy_static! {
-    pub static ref NAME_PREFIX: String = "org.mpris.MediaPlayer2".into();
-    pub static ref BUS_NAME: OwnedBusName = NAME_PREFIX.as_str().try_into().unwrap();
-}
+const NAME_PREFIX: &str = "org.mpris.MediaPlayer2";
+
+pub static BUS_NAME: LazyLock<OwnedBusName> = LazyLock::new(|| NAME_PREFIX.try_into().unwrap());
 
 #[zbus::proxy(
     interface = "org.mpris.MediaPlayer2",
@@ -59,17 +57,17 @@ pub trait Player {
 }
 
 pub mod player {
+    use std::sync::LazyLock;
+
     use zbus::{
         names::OwnedInterfaceName,
         zvariant::{self, Error as VariantError, OwnedValue},
     };
 
-    use super::{lazy_static, NAME_PREFIX};
+    use super::NAME_PREFIX;
 
-    lazy_static! {
-        pub static ref INTERFACE: OwnedInterfaceName =
-            format!("{}.Player", *NAME_PREFIX).try_into().unwrap();
-    }
+    pub static INTERFACE: LazyLock<OwnedInterfaceName> =
+        LazyLock::new(|| format!("{NAME_PREFIX}.Player").try_into().unwrap());
 
     #[derive(
         Debug,
@@ -144,7 +142,9 @@ pub mod player {
 }
 
 pub mod track_list {
-    use super::{lazy_static, OwnedObjectPath};
+    use std::sync::LazyLock;
+
+    use super::OwnedObjectPath;
 
     pub const ATTR_TRACKID: &str = "mpris:trackid";
     pub const ATTR_LENGTH: &str = "mpris:length";
@@ -152,9 +152,9 @@ pub mod track_list {
     pub const ATTR_ARTIST: &str = "xesam:artist";
     pub const ATTR_ALBUM: &str = "xesam:album";
 
-    lazy_static! {
-        pub static ref NO_TRACK: OwnedObjectPath = "/org/mpris/MediaPlayer2/TrackList/NoTrack"
+    pub static NO_TRACK: LazyLock<OwnedObjectPath> = LazyLock::new(|| {
+        "/org/mpris/MediaPlayer2/TrackList/NoTrack"
             .try_into()
-            .unwrap();
-    }
+            .unwrap()
+    });
 }

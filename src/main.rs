@@ -16,17 +16,14 @@
 use std::{
     fmt::{self, Display, Formatter},
     io::IsTerminal,
+    sync::LazyLock,
 };
 
 use anyhow::{anyhow, Context, Error};
 use clap::Parser;
-use lazy_static::lazy_static;
 use log::{error, LevelFilter};
 use tokio::runtime::Builder as RtBuilder;
-use zbus::{
-    names::{OwnedInterfaceName, OwnedWellKnownName},
-    zvariant::OwnedObjectPath,
-};
+use zbus::{names::OwnedWellKnownName, zvariant::OwnedObjectPath};
 
 mod client;
 mod format;
@@ -36,26 +33,30 @@ mod timeout;
 type Result<T = (), E = Error> = std::result::Result<T, E>;
 
 #[cfg(debug_assertions)]
-lazy_static! {
-    static ref NAME_PREFIX: String = format!("club.bnuy.debug.{}", *API_IDENT);
-}
+const SERVER_NAME_STR: &str = "club.bnuy.debug.Empress";
 
 #[cfg(not(debug_assertions))]
-lazy_static! {
-    static ref NAME_PREFIX: String = format!("club.bnuy.{}", *API_IDENT);
-}
+const SERVER_NAME_STR: &str = "club.bnuy.Empress";
 
-lazy_static! {
-    static ref PATH_PREFIX: String = format!("/club/bnuy/{}", *API_IDENT);
+#[cfg(test)]
+static INTERFACE_ID: LazyLock<String> =
+    LazyLock::new(|| SERVER_NAME_STR.replace(".debug", "") + ".Daemon");
 
-    static ref API_IDENT: String = format!("Empress{}", env!("CARGO_PKG_VERSION_MAJOR"));
-    // Interface name is non-negotiable, so don't add a .debug prefix
-    static ref INTERFACE_NAME: OwnedInterfaceName = format!("club.bnuy.{}.Daemon", *API_IDENT)
-        .try_into()
-        .unwrap();
-    static ref SERVER_NAME: OwnedWellKnownName = NAME_PREFIX.as_str().try_into().unwrap();
-    static ref SERVER_PATH: OwnedObjectPath =
-        format!("{}/Daemon", *PATH_PREFIX).try_into().unwrap();
+static SERVER_NAME: LazyLock<OwnedWellKnownName> =
+    LazyLock::new(|| SERVER_NAME_STR.try_into().unwrap());
+static SERVER_PATH: LazyLock<OwnedObjectPath> =
+    LazyLock::new(|| "/club/bnuy/Empress/Daemon".try_into().unwrap());
+
+#[cfg(test)]
+fn assert_path() {
+    assert_eq!(
+        SERVER_PATH
+            .as_str()
+            .strip_prefix('/')
+            .unwrap()
+            .replace('/', "."),
+        *INTERFACE_ID
+    );
 }
 
 #[derive(Parser)]
@@ -250,9 +251,8 @@ impl ::std::str::FromStr for Offset {
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         use regex::Regex;
 
-        lazy_static! {
-            static ref SEEK_PATTERN: Regex = Regex::new(r"(\d*(?:\.\d+)?)(\+|-)?").unwrap();
-        }
+        static SEEK_PATTERN: LazyLock<Regex> =
+            LazyLock::new(|| Regex::new(r"(\d*(?:\.\d+)?)(\+|-)?").unwrap());
 
         if let Some(caps) = SEEK_PATTERN.captures(s) {
             let time: f64 = caps[1].parse().context("Invalid number for offset")?;

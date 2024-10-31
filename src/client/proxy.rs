@@ -42,7 +42,11 @@ pub trait Empress {
 
 #[cfg(test)]
 mod tests {
-    use zbus::{names::{BusName, InterfaceName}, proxy::Defaults, zvariant::ObjectPath};
+    use zbus::{
+        names::{BusName, InterfaceName},
+        proxy::Defaults,
+        zvariant::ObjectPath,
+    };
 
     use super::EmpressProxy;
 
@@ -50,7 +54,7 @@ mod tests {
     fn test_interface() {
         assert_eq!(
             EmpressProxy::INTERFACE.as_ref().map(InterfaceName::as_str),
-            Some(crate::INTERFACE_NAME.as_str())
+            Some(crate::INTERFACE_ID.as_str())
         );
     }
 
