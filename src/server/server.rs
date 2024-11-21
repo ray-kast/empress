@@ -1,6 +1,6 @@
 use std::{collections::HashMap, future::Future, sync::Arc, time::Instant};
 
-use anyhow::{anyhow, Context};
+use anyhow::{anyhow, ensure, Context};
 use futures_util::{stream, FutureExt, StreamExt, TryFutureExt, TryStreamExt};
 use log::{debug, error, trace, warn};
 use tokio::{
@@ -17,10 +17,13 @@ use zbus::{
 };
 
 use super::{
-    method_err, mpris, mpris::player::PlaybackStatus, player_map::PlayerChange, Player, PlayerList,
-    PlayerMap, PlayerOpts, PlayerStatus, PlayerStatusKind, ZResult,
+    method_err,
+    mpris::{self, player::PlaybackStatus},
+    player::{self, Action},
+    player_map::PlayerChange,
+    Player, PlayerList, PlayerMap, PlayerOpts, PlayerStatus, PlayerStatusKind, ZResult,
 };
-use crate::{Offset, Result};
+use crate::{server::PlayerMatcher, Offset, Result};
 
 struct SignalMatcher<'a> {
     dbus: DBusProxy<'a>,
@@ -47,6 +50,21 @@ impl<'a> Drop for SignalMatcher<'a> {
             self.match_rule.is_none(),
             "Signal matcher dropped without calling .shutdown()!"
         );
+    }
+}
+
+// TODO: miserable AsyncFn workaround
+trait PeekFn {
+    type Output;
+
+    fn peek(&self, player: &Player) -> impl Future<Output = Result<Option<Self::Output>>>;
+}
+
+impl<F: Fn(&Player) -> R, R: Future<Output = Result<Option<T>>>, T> PeekFn for F {
+    type Output = T;
+
+    fn peek(&self, player: &Player) -> impl Future<Output = Result<Option<Self::Output>>> {
+        self(player)
     }
 }
 
@@ -279,7 +297,7 @@ impl Server {
 
         let sender = players
             .resolve(&sender.to_owned())
-            .context("Unexpected bus name")?
+            .with_context(|| format!("Unexpected bus name {sender:?}"))?
             .to_owned();
 
         drop(players);
@@ -287,33 +305,37 @@ impl Server {
         let mut ret = false;
 
         if !changed.is_empty() {
-            trace!("properties on {:?} changed: {changed:?}", sender.as_str());
+            trace!("properties on {sender:?} changed: {changed:?}");
 
             for (name, val) in changed {
                 // TODO: find a more elegant way to do this
                 #[allow(clippy::single_match)]
                 match &*name {
                     "PlaybackStatus" => {
-                        if let Some((mut players, mut player, val)) = async {
-                            let mut players = self.shared.players.write().await;
-                            let player = players.remove(&sender)?;
+                        let mut players = self.shared.players.write().await;
+
+                        if let Some((mut player, val)) = async {
+                            let player = players.get_mut(&sender)?;
 
                             let val: PlaybackStatus = val
                                 .downcast_ref::<&str>()
                                 .context("Error downcasting playback status")
                                 .and_then(|s| s.parse().context("Error parsing playback status"))
+                                .with_context(|| {
+                                    format!(
+                                        "Error handling property change of {name:?} for {sender:?}"
+                                    )
+                                })
                                 .map_err(|e| warn!("{e:?}"))
                                 .ok()?;
 
-                            Some((players, player, val))
+                            Some((player, val))
                         }
                         .await
                         {
                             player.update_status(val);
-                            players.put(player);
-
                             ret = true;
-                        }
+                        };
                     },
                     _ => (),
                 }
@@ -331,28 +353,31 @@ impl Server {
                 #[allow(clippy::single_match)]
                 match &*name {
                     "PlaybackStatus" => {
-                        // TODO: there are several occurrences of the remove-
-                        //       update-put pattern in the code, these could be
-                        //       simplified to a single "mutate" method
-                        if let Some((mut players, mut player, status)) = async {
-                            let mut players = self.shared.players.write().await;
-                            let player = players.remove(&sender)?;
+                        let mut players = self.shared.players.write().await;
+
+                        if let Some((mut player, status)) = async {
+                            let player = players.get_mut(&sender)?;
 
                             let status = player
                                 .playback_status()
                                 .await
-                                .map_err(|e| warn!("Error getting player status: {e}"))
+                                .context("Error getting player status")
+                                .with_context(|| {
+                                    format!(
+                                        "Error handling property invalidaton of {name:?} for \
+                                         {sender:?}"
+                                    )
+                                })
+                                .map_err(|e| warn!("{e:?}"))
                                 .ok()?;
 
-                            Some((players, player, status))
+                            Some((player, status))
                         }
                         .await
                         {
                             player.update_status(status);
-                            players.put(player);
-
                             ret = true;
-                        }
+                        };
                     },
                     _ => (),
                 }
@@ -456,55 +481,46 @@ impl Server {
         Ok(())
     }
 
-    async fn process_player_with<
-        F: Fn(Player) -> FR,
-        FR: Future<Output = Result<Option<(Player, T)>>>,
-        T,
-    >(
+    async fn apply_action<A: Action>(
         &self,
         opts: PlayerOpts,
-        f: F,
-    ) -> Result<Option<T>> {
+        action: A,
+    ) -> Result<Option<A::Output>> {
+        struct MatchAction<A>(PlayerMatcher, A);
+
+        impl<A: Action> Action for MatchAction<A> {
+            type Arg = A::Arg;
+            type Output = A::Output;
+
+            async fn can_run(&self, player: &Player) -> Result<Option<Self::Arg>> {
+                if self.0.is_match(player) {
+                    self.1.can_run(player).await
+                } else {
+                    Ok(None)
+                }
+            }
+
+            #[inline]
+            fn run(
+                &self,
+                player: &mut Player,
+                arg: Self::Arg,
+            ) -> impl Future<Output = Result<Self::Output>> {
+                self.1.run(player, arg)
+            }
+        }
+
         let matcher = opts.build().context("Invalid player filter options")?;
         let mut players = self.shared.players.write().await;
-        let mut patch = Err(None);
 
-        for player in players.iter_active() {
-            if !matcher.is_match(player) {
-                continue;
-            }
-
-            match f(player.clone()).await {
-                Ok(Some(next)) => {
-                    patch = Ok(Some(next));
-                    break;
-                },
-                Ok(None) => patch = Ok(None),
-                Err(e) => {
-                    warn!("Error processing player: {e:?}");
-                    patch = patch.map_err(|_| Some(()));
-                },
-            }
-        }
-
-        if let Some((next, ret)) = patch.or_else(|e| {
-            e.map_or(Ok(None), |()| {
-                Err(anyhow!("No players could be processed without errors"))
-            })
-        })? {
-            players.put(next);
-
-            return Ok(Some(ret));
-        }
-
-        Ok(None)
+        players.apply_action(MatchAction(matcher, action)).await
     }
 
-    async fn peek_player_with<F: Fn(Player) -> FR, FR: Future<Output = Result<Option<T>>>, T>(
+    async fn find_map_player<F: PeekFn>(
         &self,
         opts: PlayerOpts,
         f: F,
-    ) -> Result<Option<T>> {
+    ) -> Result<Option<F::Output>> {
         let matcher = opts.build().context("Invalid player filter options")?;
         let players = self.shared.players.read().await;
         let mut default = Err(None);
@@ -514,7 +530,7 @@ impl Server {
                 continue;
             }
 
-            match f(player.clone()).await {
+            match f.peek(player).await {
                 ok @ Ok(Some(_)) => return ok,
                 Ok(None) => default = Ok(None),
                 Err(e) => {
@@ -531,16 +547,6 @@ impl Server {
         })
     }
 
-    async fn process_player<F: Fn(Player) -> FR, FR: Future<Output = Result<Option<Player>>>>(
-        &self,
-        opts: PlayerOpts,
-        f: F,
-    ) -> Result<bool> {
-        self.process_player_with(opts, |p| f(p).map_ok(|p| p.map(|p| (p, ()))))
-            .await
-            .map(|o| matches!(o, Some(())))
-    }
-
     async fn handle_method<T, F: Future<Output = Result<T>>, E: std::fmt::Display + Sync>(
         &self,
         f: F,
@@ -550,44 +556,52 @@ impl Server {
     }
 
     async fn peek_player_status(&self, opts: PlayerOpts) -> Result<PlayerStatus> {
-        self.peek_player_with(opts, |p| async move {
-            let metadata = p.metadata().await?;
+        struct Peek;
 
-            let has_track = metadata
-                .get(mpris::track_list::ATTR_TRACKID)
-                .map_or(false, |v| match **v {
-                    Value::ObjectPath(ref p) => *p != mpris::track_list::NO_TRACK.as_ref(),
-                    _ => false,
-                });
+        impl PeekFn for Peek {
+            type Output = PlayerStatus;
 
-            let bus = p
-                .bus()
-                .strip_prefix(mpris::BUS_NAME.as_str())
-                .and_then(|s| s.strip_prefix('.'))
-                .map_or_else(String::new, Into::into);
-            let ident = p.identity().await?;
-            let status = p.status();
-            let position = if has_track {
-                p.position().await.ok()
-            } else {
-                None
-            };
+            async fn peek(&self, player: &Player) -> Result<Option<Self::Output>> {
+                let metadata = player.metadata().await?;
 
-            Ok(Some(PlayerStatus {
-                kind: if position.is_some() {
-                    PlayerStatusKind::Default
+                let has_track = metadata
+                    .get(mpris::track_list::ATTR_TRACKID)
+                    .map_or(false, |v| match **v {
+                        Value::ObjectPath(ref p) => *p != mpris::track_list::NO_TRACK.as_ref(),
+                        _ => false,
+                    });
+
+                let bus = player
+                    .bus()
+                    .strip_prefix(mpris::BUS_NAME.as_str())
+                    .and_then(|s| s.strip_prefix('.'))
+                    .map_or_else(String::new, Into::into);
+                let ident = player.identity().await?;
+                let status = player.status();
+                let position = if has_track {
+                    player.position().await.ok()
                 } else {
-                    PlayerStatusKind::NoPosition
-                },
-                bus,
-                ident,
-                status,
-                position: position.unwrap_or(0),
-                metadata,
-            }))
-        })
-        .map_ok(Option::unwrap_or_default)
-        .await
+                    None
+                };
+
+                Ok(Some(PlayerStatus {
+                    kind: if position.is_some() {
+                        PlayerStatusKind::Default
+                    } else {
+                        PlayerStatusKind::NoPosition
+                    },
+                    bus,
+                    ident,
+                    status,
+                    position: position.unwrap_or(0),
+                    metadata,
+                }))
+            }
+        }
+
+        self.find_map_player(opts, Peek)
+            .map_ok(Option::unwrap_or_default)
+            .await
     }
 }
 
@@ -643,7 +657,7 @@ impl Server {
 
     pub async fn next(&self, opts: PlayerOpts) -> fdo::Result<()> {
         self.handle_method(
-            self.process_player(opts, Player::try_next).map_ok(|_| ()),
+            self.apply_action(opts, player::Next).map_ok(|_| ()),
             "Error skipping player forward",
         )
         .await
@@ -651,10 +665,7 @@ impl Server {
 
     pub async fn prev(&self, opts: PlayerOpts) -> fdo::Result<()> {
         self.handle_method(
-            {
-                self.process_player(opts, Player::try_previous)
-                    .map_ok(|_| ())
-            },
+            self.apply_action(opts, player::Prev).map_ok(|_| ()),
             "Error skipping player backward",
         )
         .await
@@ -662,7 +673,7 @@ impl Server {
 
     pub async fn pause(&self, opts: PlayerOpts) -> fdo::Result<()> {
         self.handle_method(
-            self.process_player(opts, Player::try_pause).map_ok(|_| ()),
+            self.apply_action(opts, player::Pause).map_ok(|_| ()),
             "Error pausing player",
         )
         .await
@@ -670,10 +681,7 @@ impl Server {
 
     pub async fn play_pause(&self, opts: PlayerOpts) -> fdo::Result<()> {
         self.handle_method(
-            {
-                self.process_player(opts, Player::try_play_pause)
-                    .map_ok(|_| ())
-            },
+            self.apply_action(opts, player::PlayPause).map_ok(|_| ()),
             "Error playing/pausing player",
         )
         .await
@@ -681,7 +689,7 @@ impl Server {
 
     pub async fn stop(&self, opts: PlayerOpts) -> fdo::Result<()> {
         self.handle_method(
-            self.process_player(opts, Player::try_stop).map_ok(|_| ()),
+            self.apply_action(opts, player::Stop).map_ok(|_| ()),
             "Error stopping player",
         )
         .await
@@ -689,7 +697,7 @@ impl Server {
 
     pub async fn play(&self, opts: PlayerOpts) -> fdo::Result<()> {
         self.handle_method(
-            self.process_player(opts, Player::try_play).map_ok(|_| ()),
+            self.apply_action(opts, player::Play).map_ok(|_| ()),
             "Error playing player",
         )
         .await
@@ -698,7 +706,7 @@ impl Server {
     pub async fn seek_relative(&self, opts: PlayerOpts, to: f64) -> fdo::Result<f64> {
         self.handle_method(
             {
-                self.process_player_with(opts, |p| p.try_seek(Offset::Relative(to)))
+                self.apply_action(opts, player::Seek(Offset::Relative(to)))
                     .map(|p| p?.context("No players available to seek"))
             },
             "Error seeking player",
@@ -709,7 +717,7 @@ impl Server {
     pub async fn seek_absolute(&self, opts: PlayerOpts, to: f64) -> fdo::Result<f64> {
         self.handle_method(
             {
-                self.process_player_with(opts, |p| p.try_seek(Offset::Absolute(to)))
+                self.apply_action(opts, player::Seek(Offset::Absolute(to)))
                     .map(|p| p?.context("No players available to seek"))
             },
             "Error seeking player",
@@ -720,7 +728,7 @@ impl Server {
     pub async fn vol_relative(&self, opts: PlayerOpts, to: f64) -> fdo::Result<f64> {
         self.handle_method(
             {
-                self.process_player_with(opts, |p| p.try_set_volume(Offset::Relative(to)))
+                self.apply_action(opts, player::SetVolume(Offset::Relative(to)))
                     .map(|p| p?.context("No players available to get/adjust volume"))
             },
             "Error getting/adjusting player volume",
@@ -731,7 +739,7 @@ impl Server {
     pub async fn vol_absolute(&self, opts: PlayerOpts, to: f64) -> fdo::Result<f64> {
         self.handle_method(
             {
-                self.process_player_with(opts, |p| p.try_set_volume(Offset::Absolute(to)))
+                self.apply_action(opts, player::SetVolume(Offset::Absolute(to)))
                     .map(|p| p?.context("No players available to set volume"))
             },
             "Error setting player volume",
@@ -742,16 +750,17 @@ impl Server {
     pub async fn switch_current(&self, to: &str, switch_playing: bool) -> fdo::Result<()> {
         self.handle_method(
             async {
-                let bus = WellKnownName::try_from(format!("{}.{to}", *mpris::BUS_NAME))
+                let to = WellKnownName::try_from(format!("{}.{to}", *mpris::BUS_NAME))
                     .map_err(|s| anyhow!("{s:?} is not a valid bus name"))?;
 
-                let Some(curr) = self.shared.players.write().await.remove(&bus) else {
-                    return Err(anyhow!("No players stored with the given bus name"));
-                };
+                let mut players = self.shared.players.write().await;
+                ensure!(
+                    players.contains_key(&to),
+                    "No players stored with the given bus name!"
+                );
 
-                let mut curr = if switch_playing {
+                if switch_playing {
                     let mut put = vec![];
-                    let mut players = self.shared.players.write().await;
 
                     for player in players.iter_all() {
                         if player.playback_status().await? == PlaybackStatus::Playing
@@ -762,22 +771,23 @@ impl Server {
                     }
 
                     for bus in put {
-                        let player = players.remove(&bus).unwrap();
-                        let player = player
+                        players
+                            .get_mut(&bus)
+                            .unwrap()
                             .pause()
                             .await
                             .context("Error pausing an unselected player")?;
-
-                        players.put(player);
                     }
 
-                    curr.play().await.context("Error playing selected player")?
+                    players
+                        .get_mut(&to)
+                        .unwrap()
+                        .play()
+                        .await
+                        .context("Error playing selected player")?;
                 } else {
-                    curr
-                };
-
-                curr.force_update();
-                self.shared.players.write().await.put(curr);
+                    players.get_mut(&to).unwrap().force_update();
+                }
 
                 Ok(())
             },

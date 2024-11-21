@@ -1,4 +1,4 @@
-use std::{collections::HashMap, fmt::Debug, time::Instant};
+use std::{collections::HashMap, fmt::Debug, future::Future, time::Instant};
 
 use anyhow::{anyhow, Context};
 use zbus::{
@@ -13,6 +13,19 @@ use super::{
     MatchPlayer,
 };
 use crate::{timeout::Timeout, Offset, Result};
+
+pub(super) trait Action {
+    type Arg;
+    type Output;
+
+    fn can_run(&self, player: &Player) -> impl Future<Output = Result<Option<Self::Arg>>>;
+
+    fn run(
+        &self,
+        player: &mut Player,
+        arg: Self::Arg,
+    ) -> impl Future<Output = Result<Self::Output>>;
+}
 
 #[derive(Debug, Clone)]
 pub(super) struct Player {
@@ -35,6 +48,13 @@ async fn timeout<
     f: F,
 ) -> Result<R, crate::timeout::Error<E>> {
     t.try_run(std::time::Duration::from_secs(2), f).await
+}
+
+macro_rules! updated_now {
+    ($self:expr) => {{
+        $self.last_update = Instant::now();
+        Ok(())
+    }};
 }
 
 impl Player {
@@ -82,9 +102,7 @@ impl Player {
     //////// Accessors ////////
 
     #[inline]
-    pub fn status(&self) -> PlaybackStatus {
-        self.status
-    }
+    pub fn status(&self) -> PlaybackStatus { self.status }
 
     #[inline]
     pub fn update_status(&mut self, status: PlaybackStatus) -> Option<Instant> {
@@ -99,9 +117,7 @@ impl Player {
     }
 
     #[inline]
-    pub fn last_update(&self) -> Instant {
-        self.last_update
-    }
+    pub fn last_update(&self) -> Instant { self.last_update }
 
     #[inline]
     pub fn force_update(&mut self) -> Instant {
@@ -122,74 +138,56 @@ impl Player {
 
     //////// Methods under MediaPlayer2.Player ////////
 
-    pub async fn next(self) -> Result<Self> {
+    pub async fn next(&mut self) -> Result {
         timeout(&self.inner, PlayerProxy::next)
             .await
             .context("Proxy call for Next failed")?;
 
-        Ok(Self {
-            last_update: Instant::now(),
-            ..self
-        })
+        updated_now!(self)
     }
 
-    pub async fn previous(self) -> Result<Self> {
+    pub async fn previous(&mut self) -> Result {
         timeout(&self.inner, PlayerProxy::previous)
             .await
             .context("Proxy call for Previous failed")?;
 
-        Ok(Self {
-            last_update: Instant::now(),
-            ..self
-        })
+        updated_now!(self)
     }
 
-    pub async fn pause(self) -> Result<Self> {
+    pub async fn pause(&mut self) -> Result {
         timeout(&self.inner, PlayerProxy::pause)
             .await
             .context("Proxy call for Pause failed")?;
 
-        Ok(Self {
-            status: PlaybackStatus::Paused,
-            last_update: Instant::now(),
-            ..self
-        })
+        self.status = PlaybackStatus::Paused;
+        updated_now!(self)
     }
 
-    pub async fn stop(self) -> Result<Self> {
+    pub async fn stop(&mut self) -> Result {
         timeout(&self.inner, PlayerProxy::stop)
             .await
             .context("Proxy call for Stop failed")?;
 
-        Ok(Self {
-            status: PlaybackStatus::Stopped,
-            last_update: Instant::now(),
-            ..self
-        })
+        self.status = PlaybackStatus::Stopped;
+        updated_now!(self)
     }
 
-    pub async fn play(self) -> Result<Self> {
+    pub async fn play(&mut self) -> Result {
         timeout(&self.inner, PlayerProxy::play)
             .await
             .context("Proxy call for Play failed")?;
 
-        Ok(Self {
-            status: PlaybackStatus::Playing,
-            last_update: Instant::now(),
-            ..self
-        })
+        self.status = PlaybackStatus::Playing;
+        updated_now!(self)
     }
 
     #[allow(clippy::cast_possible_truncation)]
-    pub async fn set_position(self, id: ObjectPath<'_>, secs: i64) -> Result<Self> {
+    pub async fn set_position(&mut self, id: ObjectPath<'_>, secs: i64) -> Result {
         timeout(&self.inner, |p| p.set_position(id, secs))
             .await
             .context("Proxy call for SetPosition failed")?;
 
-        Ok(Self {
-            last_update: Instant::now(),
-            ..self
-        })
+        updated_now!(self)
     }
 
     //////// Properties under MediaPlayer2 ////////
@@ -270,95 +268,37 @@ impl Player {
 
     //////// Empress-specific wrapper methods ////////
 
-    pub async fn try_next(self) -> Result<Option<Self>> {
-        Ok(if self.can_go_next().await? {
-            Some(self.next().await?)
-        } else {
-            None
-        })
-    }
-
-    pub async fn try_previous(self) -> Result<Option<Self>> {
-        Ok(if self.can_go_previous().await? {
-            Some(self.previous().await?)
-        } else {
-            None
-        })
-    }
-
-    pub async fn try_pause(self) -> Result<Option<Self>> {
-        Ok(
-            if self.playback_status().await? == PlaybackStatus::Playing && self.can_pause().await? {
-                Some(self.pause().await?)
-            } else {
-                None
-            },
-        )
-    }
-
-    pub async fn try_play_pause(self) -> Result<Option<Self>> {
-        Ok(match self.playback_status().await? {
-            PlaybackStatus::Playing if self.can_pause().await? => Some(self.pause().await?),
-            PlaybackStatus::Paused if self.can_play().await? => Some(self.play().await?),
-            _ => None,
-        })
-    }
-
-    pub async fn try_stop(self) -> Result<Option<Self>> {
-        Ok(match self.playback_status().await? {
-            PlaybackStatus::Playing | PlaybackStatus::Paused if self.can_control().await? => {
-                Some(self.stop().await?)
-            },
-            _ => None,
-        })
-    }
-
-    pub async fn try_play(self) -> Result<Option<Self>> {
-        Ok(
-            if self.playback_status().await? != PlaybackStatus::Playing && self.can_play().await? {
-                Some(self.play().await?)
-            } else {
-                None
-            },
-        )
-    }
-
     #[allow(clippy::cast_precision_loss, clippy::cast_possible_truncation)]
-    pub async fn try_seek(self, to: Offset) -> Result<Option<(Self, f64)>> {
-        Ok(if self.can_seek().await? {
-            let meta = self.metadata().await?;
+    async fn offset_position(&mut self, pos: Offset) -> Result<f64> {
+        let meta = self.metadata().await?;
 
-            let pos = match to {
-                Offset::Relative(p) => self.position().await? + (p * 1e6).round() as i64,
-                Offset::Absolute(p) => (p * 1e6).round() as i64,
-            };
+        let pos = match pos {
+            Offset::Relative(p) => self.position().await? + (p * 1e6).round() as i64,
+            Offset::Absolute(p) => (p * 1e6).round() as i64,
+        };
 
-            Some((
-                self.set_position(
-                    meta.get(mpris::track_list::ATTR_TRACKID)
-                        .context("Missing track ID in metadata")?
-                        .downcast_ref::<&ObjectPath>()
-                        .map(ObjectPath::as_ref)?,
-                    pos,
-                )
-                .await?,
-                pos as f64 / 1e6,
-            ))
-        } else {
-            None
-        })
+        self.set_position(
+            meta.get(mpris::track_list::ATTR_TRACKID)
+                .context("Missing track ID in metadata")?
+                .downcast_ref::<&ObjectPath>()
+                .map(ObjectPath::as_ref)?,
+            pos,
+        )
+        .await?;
+
+        Ok(pos as f64 / 1e6)
     }
 
-    pub async fn try_set_volume(self, vol: Offset) -> Result<Option<(Self, f64)>> {
+    async fn offset_volume(&mut self, vol: Offset) -> Result<f64> {
         let (vol, set) = match vol {
             Offset::Relative(v) => {
-                let prev = self.volume().await?;
-                let next = prev + v;
+                let old = self.volume().await?;
+                let new = old + v;
 
-                if (next - prev).abs() > 1e-5 {
-                    (next, true)
+                if (new - old).abs() > 1e-5 {
+                    (new, true)
                 } else {
-                    (prev, false)
+                    (old, false)
                 }
             },
             Offset::Absolute(v) => (v, true),
@@ -369,18 +309,14 @@ impl Player {
         }
 
         Ok(if set {
-            if self.can_control().await? {
-                // Safety check
-                let vol = vol.clamp(0.0, 1.0);
+            // Safety check
+            let vol = vol.clamp(0.0, 1.0);
 
-                self.set_volume(vol).await?;
+            self.set_volume(vol).await?;
 
-                Some((self, vol))
-            } else {
-                None
-            }
+            vol
         } else {
-            Some((self, vol))
+            vol
         })
     }
 }
@@ -393,7 +329,104 @@ impl MatchPlayer for Player {
             .unwrap_or("")
     }
 
-    fn status(&self) -> PlaybackStatus {
-        self.status
-    }
+    fn status(&self) -> PlaybackStatus { self.status }
 }
+
+trait IntoOption {
+    type Output;
+
+    fn into_option(self) -> Option<Self::Output>;
+}
+
+impl IntoOption for bool {
+    type Output = ();
+
+    #[inline]
+    fn into_option(self) -> Option<Self::Output> { self.then_some(()) }
+}
+
+impl<T> IntoOption for Option<T> {
+    type Output = T;
+
+    #[inline]
+    fn into_option(self) -> Option<Self::Output> { self }
+}
+
+macro_rules! action {
+    (
+        $vis:vis $name:ident $(($($inp:ty),* $(,)?))?: fn($($parm:ty),*) -> $output:ty,
+        |$cr_me:pat_param, $cr_player:ident| $can_run:expr,
+        |$r_me:pat_param, $r_player:ident, $r_arg:pat_param| $run:expr $(,)?
+    ) => {
+        #[derive(Clone, Copy)]
+        $vis struct $name $(($(pub $inp,)*))?;
+
+        impl Action for $name {
+            type Arg = ($($parm,)*);
+            type Output = $output;
+
+            async fn can_run(&self, $cr_player: &Player) -> Result<Option<Self::Arg>> {
+                let $cr_me = self;
+                Ok(IntoOption::into_option($can_run))
+            }
+
+            async fn run(
+                &self,
+                $r_player: &mut Player,
+                $r_arg: Self::Arg
+            ) -> Result<Self::Output> {
+                let $r_me = self;
+                $run
+            }
+        }
+    };
+}
+
+action!(
+    pub Next: fn() -> (),
+    |Self, p| p.can_go_next().await?,
+    |Self, p, ()| p.next().await,
+);
+action!(
+    pub Prev: fn() -> (),
+    |Self, p| p.can_go_previous().await?,
+    |Self, p, ()| p.previous().await,
+);
+action!(
+    pub Pause: fn() -> (),
+    |Self, p| p.playback_status().await? == PlaybackStatus::Playing && p.can_pause().await?,
+    |Self, p, ()| p.pause().await,
+);
+action!(
+    pub PlayPause: fn(bool) -> (),
+    |Self, p| match p.playback_status().await? {
+        PlaybackStatus::Playing if p.can_pause().await? => Some((true,)),
+        PlaybackStatus::Paused if p.can_play().await? => Some((false,)),
+        _ => None,
+    },
+    |Self, p, (playing,)| if playing {
+        p.pause().await
+    } else {
+        p.play().await
+    }
+);
+action!(
+    pub Stop: fn() -> (),
+    |Self, p| p.playback_status().await? != PlaybackStatus::Stopped && p.can_control().await?,
+    |Self, p, ()| p.stop().await,
+);
+action!(
+    pub Play: fn() -> (),
+    |Self, p| p.playback_status().await? != PlaybackStatus::Playing && p.can_play().await?,
+    |Self, p, ()| p.play().await,
+);
+action!(
+    pub Seek(Offset): fn() -> f64,
+    |Self(_), p| p.can_seek().await?,
+    |Self(pos), p, ()| p.offset_position(*pos).await,
+);
+action!(
+    pub SetVolume(Offset): fn() -> f64,
+    |Self(_), p| p.can_control().await?,
+    |Self(vol), p, ()| p.offset_volume(*vol).await,
+);

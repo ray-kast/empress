@@ -1,3 +1,1 @@
-fn main() {
-    lalrpop::process_root().unwrap();
-}
+fn main() { lalrpop::process_root().unwrap(); }

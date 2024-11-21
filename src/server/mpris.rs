@@ -110,23 +110,17 @@ pub mod player {
     }
 
     impl<'a> From<PlaybackStatus> for zvariant::Value<'a> {
-        fn from(value: PlaybackStatus) -> Self {
-            value.to_string().into()
-        }
+        fn from(value: PlaybackStatus) -> Self { value.to_string().into() }
     }
 
     impl From<PlaybackStatus> for String {
-        fn from(s: PlaybackStatus) -> Self {
-            s.to_string()
-        }
+        fn from(s: PlaybackStatus) -> Self { s.to_string() }
     }
 
     impl TryFrom<String> for PlaybackStatus {
         type Error = <Self as std::str::FromStr>::Err;
 
-        fn try_from(value: String) -> Result<Self, Self::Error> {
-            value.parse()
-        }
+        fn try_from(value: String) -> Result<Self, Self::Error> { value.parse() }
     }
 
     impl TryFrom<OwnedValue> for PlaybackStatus {

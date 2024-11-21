@@ -1,5 +1,4 @@
-use std::io::IsTerminal;
-use std::{future::Future, io, time::Duration};
+use std::{future::Future, io, io::IsTerminal, time::Duration};
 
 use anyhow::{Context, Error};
 use futures_util::StreamExt;
@@ -83,13 +82,9 @@ impl TryFrom<PlayerStatus> for NowPlayingResult {
 }
 
 impl MatchPlayer for NowPlayingResult {
-    fn bus(&self) -> &str {
-        self.player.bus.as_ref().map_or("", |s| s)
-    }
+    fn bus(&self) -> &str { self.player.bus.as_ref().map_or("", |s| s) }
 
-    fn status(&self) -> PlaybackStatus {
-        self.status
-    }
+    fn status(&self) -> PlaybackStatus { self.status }
 }
 
 macro_rules! courtesy_line {

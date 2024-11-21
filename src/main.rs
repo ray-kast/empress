@@ -48,6 +48,7 @@ static SERVER_PATH: LazyLock<OwnedObjectPath> =
     LazyLock::new(|| "/club/bnuy/Empress/Daemon".try_into().unwrap());
 
 #[cfg(test)]
+#[test]
 fn assert_path() {
     assert_eq!(
         SERVER_PATH

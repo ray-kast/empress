@@ -133,9 +133,7 @@ fn btag(val: &'static str, b: Bit<'static>) -> impl for<'a> Fn(&'a str) -> BResu
     }
 }
 
-fn any1(s: &str) -> IResult<&str, &str> {
-    s.split_at_position1_complete(|_| true, ErrorKind::Char)
-}
+fn any1(s: &str) -> IResult<&str, &str> { s.split_at_position1_complete(|_| true, ErrorKind::Char) }
 
 // Adapted from split_at_position1_complete
 fn split_before<'a, O, E>(

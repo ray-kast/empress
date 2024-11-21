@@ -7,14 +7,20 @@ use std::{
 };
 
 use anyhow::Context;
+use dead_names::DeadNameMap;
+use key_guard::KeyGuard;
+pub(super) use key_guard::PlayerMut;
 use log::{debug, trace, warn};
 use zbus::{
     names::{BusName, UniqueName, WellKnownName},
     Connection,
 };
 
-use super::{mpris::player::PlaybackStatus, Player};
+use super::{mpris::player::PlaybackStatus, player::Action, Player};
 use crate::Result;
+
+mod dead_names;
+mod key_guard;
 
 // TODO: smoke-test map update logic
 
@@ -26,9 +32,7 @@ struct PlayerKey {
 }
 
 impl cmp::PartialOrd for PlayerKey {
-    fn partial_cmp(&self, other: &Self) -> Option<cmp::Ordering> {
-        Some(self.cmp(other))
-    }
+    fn partial_cmp(&self, other: &Self) -> Option<cmp::Ordering> { Some(self.cmp(other)) }
 }
 
 impl cmp::Ord for PlayerKey {
@@ -70,11 +74,38 @@ impl std::fmt::Display for PlayerChange {
     }
 }
 
+type KeyMap = BTreeSet<PlayerKey>;
+
+fn active_keys(keys: &KeyMap) -> impl Iterator<Item = &PlayerKey> {
+    let mut prev = None;
+
+    keys.iter().take_while(move |p| {
+        let ret = prev.map_or(true, |s| s == p.status);
+        prev = Some(p.status);
+
+        if !ret {
+            debug!("Stopping active-player search before {p:?}");
+        }
+
+        ret
+    })
+}
+
+fn update_key<Q: ?Sized + Ord, P: GetKey>(keys: &mut KeyMap, old: &Q, player: &P)
+where PlayerKey: Borrow<Q> {
+    let key = player.get_key();
+    if key.borrow() != old {
+        assert!(keys.remove(old));
+        assert!(keys.insert(key));
+    }
+}
+
 #[derive(Debug)]
 pub(super) struct PlayerMap {
     players: HashMap<WellKnownName<'static>, Player>,
     names: HashMap<UniqueName<'static>, WellKnownName<'static>>,
-    keys: BTreeSet<PlayerKey>,
+    dead_names: DeadNameMap,
+    keys: KeyGuard,
 }
 
 impl PlayerMap {
@@ -91,6 +122,7 @@ impl PlayerMap {
 
         assert!(name_set.len() == names.len());
         self.names = names;
+        self.dead_names = DeadNameMap::new();
 
         for name in key_set.difference(&name_set) {
             trace!("Removing player from map: {name:?}");
@@ -98,7 +130,7 @@ impl PlayerMap {
             if let Some(ref mut c) = changes {
                 c.push(PlayerChange::Remove(name.clone()));
             }
-            assert!(self.remove(name).is_some());
+            assert!(self.remove(name));
         }
 
         for name in name_set.difference(&key_set) {
@@ -145,15 +177,14 @@ impl PlayerMap {
         Self {
             players: HashMap::new(),
             names: HashMap::new(),
-            keys: BTreeSet::new(),
+            dead_names: DeadNameMap::new(),
+            keys: KeyGuard::new(),
         }
     }
 
-    pub fn resolve<Q: Hash + Eq>(&self, uniq: &Q) -> Option<&WellKnownName<'static>>
-    where
-        UniqueName<'static>: Borrow<Q>,
-    {
-        self.names.get(uniq)
+    pub fn resolve<Q: ?Sized + Hash + Eq>(&self, uniq: &Q) -> Option<&WellKnownName<'static>>
+    where UniqueName<'static>: Borrow<Q> {
+        self.names.get(uniq).or_else(|| self.dead_names.get(uniq))
     }
 
     pub fn iter_all(&self) -> impl Iterator<Item = &Player> {
@@ -164,21 +195,41 @@ impl PlayerMap {
     /// highest-priority) player in the list.  This should be used when
     /// selecting a player to run an action on, to avoid unexpected behavior.
     pub fn iter_active(&self) -> impl Iterator<Item = &Player> {
-        let mut prev = None;
+        active_keys(&self.keys).map(|k| &self.players[&k.bus])
+    }
 
-        self.keys
-            .iter()
-            .take_while(move |p| {
-                let ret = prev.map_or(true, |s| s == p.status);
-                prev = Some(p.status);
+    pub fn contains_key<Q: ?Sized + Hash + Eq>(&mut self, bus: &Q) -> bool
+    where WellKnownName<'static>: Borrow<Q> {
+        self.players.contains_key(bus)
+    }
 
-                if !ret {
-                    debug!("Stopping active-player search before {p:?}");
-                }
+    pub fn get_mut<Q: ?Sized + Hash + Eq>(&mut self, bus: &Q) -> Option<PlayerMut>
+    where WellKnownName<'static>: Borrow<Q> {
+        self.players
+            .get_mut(bus)
+            .map(|player| PlayerMut::new(player, &mut self.keys))
+    }
 
-                ret
-            })
-            .map(|k| &self.players[&k.bus])
+    pub async fn apply_action<A: Action>(&mut self, action: A) -> Result<Option<A::Output>> {
+        let mut keys = active_keys(&self.keys);
+        let found = loop {
+            let Some(key) = keys.next() else { break None };
+
+            let player = self.players.get_mut(&key.bus).unwrap();
+            if let Some(arg) = action.can_run(player).await.unwrap_or_else(|e| {
+                warn!("Error querying player {:?} for action: {e:?}", key.bus);
+                None
+            }) {
+                break Some((player, arg));
+            }
+        };
+        let Some((player, arg)) = found else {
+            return Ok(None);
+        };
+        drop(keys);
+        let mut player = PlayerMut::new(player, &mut self.keys);
+
+        action.run(&mut player, arg).await.map(Some)
     }
 
     /// Always updates the map, but only returns `Some` if an existing key was
@@ -190,7 +241,7 @@ impl PlayerMap {
             Entry::Vacant(v) => {
                 trace!("Inserting new player into map: {player:?}");
 
-                self.keys.insert(player.get_key());
+                assert!(self.keys.insert(player.get_key()));
                 v.insert(player);
                 None
             },
@@ -198,27 +249,24 @@ impl PlayerMap {
                 trace!("Patching existing player in map: {player:?}");
 
                 let value = o.into_mut();
-                assert!(self.keys.remove(&value.get_key()));
-                self.keys.insert(player.get_key());
+                update_key(&mut self.keys, &value.get_key(), &player);
                 Some(std::mem::replace(value, player))
             },
         }
     }
 
-    pub fn remove<Q: Hash + Eq + std::fmt::Debug>(&mut self, bus: &Q) -> Option<Player>
-    where
-        WellKnownName<'static>: Borrow<Q>,
-    {
+    pub fn remove<Q: ?Sized + Hash + Eq + std::fmt::Debug>(&mut self, bus: &Q) -> bool
+    where WellKnownName<'static>: Borrow<Q> {
         if let Some(old_player) = self.players.remove(bus) {
             trace!("Removing player from map: {bus:?}");
 
             assert!(self.keys.remove(&old_player.get_key()));
 
-            Some(old_player)
+            true
         } else {
-            trace!("Player to remove does not exist in map: {bus:?}");
+            warn!("Player to remove does not exist in map: {bus:?}");
 
-            None
+            false
         }
     }
 
@@ -228,7 +276,7 @@ impl PlayerMap {
         now: Instant,
         uniq: UniqueName<'static>,
         bus: WellKnownName<'static>,
-    ) -> Result<(Option<WellKnownName<'static>>, Option<Player>)> {
+    ) -> Result<(Option<WellKnownName<'static>>, bool)> {
         #[inline]
         async fn insert_new(
             this: &mut PlayerMap,
@@ -253,31 +301,35 @@ impl PlayerMap {
             if old_bus == bus {
                 debug_assert!(self.players.contains_key(&bus));
 
-                Ok((Some(old_bus), None))
+                Ok((Some(old_bus), false))
             } else {
-                let player = self.remove(&old_bus);
+                warn!("Replacing bus name {old_bus:?} with {bus:?}");
+
+                let ret = self.remove(&old_bus);
 
                 insert_new(self, conn, now, bus).await?;
 
-                Ok((Some(old_bus), player))
+                Ok((Some(old_bus), ret))
             }
         } else {
             insert_new(self, conn, now, bus).await?;
 
-            Ok((None, None))
+            Ok((None, false))
         }
     }
 
-    pub fn remove_owner<Q: Hash + Eq>(
+    pub fn remove_owner<Q: ?Sized + Hash + Eq + ToOwned<Owned = UniqueName<'static>>>(
         &mut self,
         uniq: &Q,
-    ) -> Option<(WellKnownName<'static>, Option<Player>)>
+    ) -> Option<(WellKnownName<'static>, bool)>
     where
         UniqueName<'static>: Borrow<Q>,
     {
         let bus = self.names.remove(uniq)?;
-        let player = self.remove(&bus);
+        let ret = self.remove(&bus);
 
-        Some((bus, player))
+        self.dead_names.insert(uniq.to_owned(), bus.clone());
+
+        Some((bus, ret))
     }
 }

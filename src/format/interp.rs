@@ -54,9 +54,7 @@ pub enum StreamError {
 }
 
 impl<T: Into<StreamError>> From<T> for Error {
-    fn from(err: T) -> Self {
-        Self::Stream(err.into())
-    }
+    fn from(err: T) -> Self { Self::Stream(err.into()) }
 }
 
 pub type Result<T, E = Error> = std::result::Result<T, E>;
@@ -125,8 +123,7 @@ pub trait StreamAll<'a>: IntoIterator {
 }
 
 impl<'a, T: Stream<'a>, I: IntoIterator<Item = T>> StreamAll<'a> for I
-where
-    T::Context: Clone,
+where T::Context: Clone
 {
     type Context = T::Context;
     type Error = T::Error;

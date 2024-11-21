@@ -111,9 +111,7 @@ impl<'a, 's> Eval<'a> for Lens<'s> {
     type Output = CowValue<'a>;
 
     fn eval(self, ctx: &'a Context, topic: Option<CowValue<'a>>) -> Result<CowValue<'a>> {
-        fn as_usize(i: &Value) -> Option<usize> {
-            i.as_u64().and_then(|i| i.try_into().ok())
-        }
+        fn as_usize(i: &Value) -> Option<usize> { i.as_u64().and_then(|i| i.try_into().ok()) }
 
         fn array_has_idx(a: &[Value], i: &Value) -> bool {
             as_usize(i).map_or(false, |i| a.len() > i)
