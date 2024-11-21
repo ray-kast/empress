@@ -16,6 +16,7 @@ build = "build.rs"
 [profile.release]
 opt-level = 3
 lto = "thin"
+strip = true
 
 [dependencies]
 anyhow = "1.0.91"
