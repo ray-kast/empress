@@ -93,8 +93,6 @@ enum ClientCommand {
     Scan,
     /// List the players currently tracked by the daemon
     ListPlayers,
-    /// Skip one track forwards
-    Next(PlayerOpts),
     /// Print information about the current track
     #[command(long_about = include_str!("../etc/now_playing_long.txt"))]
     NowPlaying {
@@ -113,6 +111,10 @@ enum ClientCommand {
         #[arg(short, long)]
         watch: bool,
     },
+    /// Focus a player
+    Raise(PlayerOpts),
+    /// Skip one track forwards
+    Next(PlayerOpts),
     /// Skip one track backwards
     Previous(PlayerOpts),
     /// Pause a currently-playing player

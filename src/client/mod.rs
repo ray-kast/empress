@@ -95,6 +95,7 @@ macro_rules! courtesy_line {
     };
 }
 
+#[allow(clippy::too_many_lines)]
 pub(super) async fn run(cmd: ClientCommand) -> Result {
     let conn = connection::Builder::session()
         .context("Error creatihng session connection builder")?
@@ -122,6 +123,10 @@ pub(super) async fn run(cmd: ClientCommand) -> Result {
                     warn!("Change detected: {line}");
                 }
             }
+        },
+        ClientCommand::Raise(opts) => {
+            let opts = opts.into();
+            try_send(&proxy, |p| p.raise(&opts)).await?;
         },
         ClientCommand::Next(opts) => {
             let opts = opts.into();

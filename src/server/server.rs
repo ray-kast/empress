@@ -1,4 +1,9 @@
-use std::{collections::HashMap, future::Future, sync::Arc, time::Instant};
+use std::{
+    collections::HashMap,
+    future::Future,
+    sync::{Arc, LazyLock},
+    time::Instant,
+};
 
 use anyhow::{anyhow, ensure, Context};
 use futures_util::{stream, FutureExt, StreamExt, TryFutureExt, TryStreamExt};
@@ -51,6 +56,14 @@ impl<'a> Drop for SignalMatcher<'a> {
             "Signal matcher dropped without calling .shutdown()!"
         );
     }
+}
+
+#[derive(Clone, Copy)]
+enum PropInterface {
+    /// org.mpris.MediaPlayer2
+    Base,
+    /// org.mpris.MediaPlayer2.Player
+    Player,
 }
 
 // TODO: miserable AsyncFn workaround
@@ -115,7 +128,19 @@ impl Server {
         }
     }
 
-    fn filter_prop_changed(msg: &Message) -> Option<(HashMap<String, OwnedValue>, Vec<String>)> {
+    fn filter_prop_changed(
+        msg: &Message,
+    ) -> Option<(PropInterface, HashMap<String, OwnedValue>, Vec<String>)> {
+        static IFACE_MAP: LazyLock<HashMap<&'static OwnedInterfaceName, PropInterface>> =
+            LazyLock::new(|| {
+                [
+                    (&*mpris::INTERFACE, PropInterface::Base),
+                    (&*mpris::player::INTERFACE, PropInterface::Player),
+                ]
+                .into_iter()
+                .collect()
+            });
+
         let hdr = msg.header();
         let iface = hdr.interface();
         let memb = hdr.member();
@@ -139,11 +164,7 @@ impl Server {
                 },
             };
 
-        if iface != mpris::player::INTERFACE.as_ref() {
-            return None;
-        }
-
-        Some((changed, invalidated))
+        Some((*IFACE_MAP.get(&iface)?, changed, invalidated))
     }
 
     async fn spawn_background_scanner(
@@ -244,10 +265,7 @@ impl Server {
                 },
             }
 
-            // TODO: this may trigger false positives (and, in cases where
-            //       changes are not propagated by the background scanner,
-            //       false negatives)
-            match self.now_playing_changed(&ctx).await {
+            match self.now_playing_invalidate(&ctx).await {
                 Ok(()) => (),
                 Err(e) => {
                     error!("Error sending change event for NowPlaying: {e}");
@@ -283,11 +301,12 @@ impl Server {
         drop(matcher);
     }
 
+    // Returns true if the player list needs updating
     #[inline]
     async fn handle_property_changed(
         &self,
         msg: &Message,
-        (changed, invalidated): (HashMap<String, OwnedValue>, Vec<String>),
+        (iface, changed, invalidated): (PropInterface, HashMap<String, OwnedValue>, Vec<String>),
     ) -> Result<bool> {
         let header = msg.header();
 
@@ -310,8 +329,10 @@ impl Server {
             for (name, val) in changed {
                 // TODO: find a more elegant way to do this
                 #[allow(clippy::single_match)]
-                match &*name {
-                    "PlaybackStatus" => {
+                match (iface, &*name) {
+                    (PropInterface::Base, "Identity")
+                    | (PropInterface::Player, "Metadata" | "Position") => ret = true,
+                    (PropInterface::Player, "PlaybackStatus") => {
                         let mut players = self.shared.players.write().await;
 
                         if let Some((mut player, val)) = async {
@@ -351,8 +372,10 @@ impl Server {
             for name in invalidated {
                 // TODO: find a more elegant way to do this
                 #[allow(clippy::single_match)]
-                match &*name {
-                    "PlaybackStatus" => {
+                match (iface, &*name) {
+                    (PropInterface::Base, "Identity")
+                    | (PropInterface::Player, "Metadata" | "Position") => ret = true,
+                    (PropInterface::Base, "PlaybackStatus") => {
                         let mut players = self.shared.players.write().await;
 
                         if let Some((mut player, status)) = async {
@@ -387,6 +410,7 @@ impl Server {
         Ok(ret)
     }
 
+    // Returns true if the player list needs updating
     #[inline]
     async fn handle_name_owner_changed(
         &self,
@@ -561,6 +585,7 @@ impl Server {
         impl PeekFn for Peek {
             type Output = PlayerStatus;
 
+            // Depends on: metadata, bus, identity, status, position
             async fn peek(&self, player: &Player) -> Result<Option<Self::Output>> {
                 let metadata = player.metadata().await?;
 
@@ -607,7 +632,7 @@ impl Server {
 
 #[zbus::interface(name = "club.bnuy.Empress.Daemon")]
 impl Server {
-    #[zbus(property)]
+    #[zbus(property(emits_changed_signal = "invalidates"))]
     pub async fn now_playing(&self) -> fdo::Result<PlayerStatus> {
         self.handle_method(
             self.peek_player_status(PlayerOpts::default()),
@@ -653,6 +678,14 @@ impl Server {
     pub async fn player_status(&self, opts: PlayerOpts) -> fdo::Result<PlayerStatus> {
         self.handle_method(self.peek_player_status(opts), "Error getting player status")
             .await
+    }
+
+    pub async fn raise(&self, opts: PlayerOpts) -> fdo::Result<()> {
+        self.handle_method(
+            self.apply_action(opts, player::Raise).map_ok(|_| ()),
+            "Error focusing player",
+        )
+        .await
     }
 
     pub async fn next(&self, opts: PlayerOpts) -> fdo::Result<()> {

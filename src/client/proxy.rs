@@ -17,6 +17,8 @@ pub trait Empress {
 
     fn player_status(&self, opts: &PlayerOpts) -> fdo::Result<PlayerStatus>;
 
+    fn raise(&self, opts: &PlayerOpts) -> fdo::Result<()>;
+
     fn next(&self, opts: &PlayerOpts) -> fdo::Result<()>;
 
     fn prev(&self, opts: &PlayerOpts) -> fdo::Result<()>;

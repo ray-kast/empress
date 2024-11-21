@@ -2,19 +2,25 @@ use std::{collections::HashMap, sync::LazyLock};
 
 use zbus::{
     fdo,
-    names::OwnedBusName,
+    names::{OwnedBusName, OwnedInterfaceName},
     zvariant::{ObjectPath, OwnedObjectPath, OwnedValue},
 };
 
 const NAME_PREFIX: &str = "org.mpris.MediaPlayer2";
 
 pub static BUS_NAME: LazyLock<OwnedBusName> = LazyLock::new(|| NAME_PREFIX.try_into().unwrap());
+pub static INTERFACE: LazyLock<OwnedInterfaceName> =
+    LazyLock::new(|| NAME_PREFIX.try_into().unwrap());
 
 #[zbus::proxy(
     interface = "org.mpris.MediaPlayer2",
     default_path = "/org/mpris/MediaPlayer2"
 )]
 pub trait MediaPlayer {
+    fn raise(&self) -> fdo::Result<()>;
+
+    #[zbus(property)]
+    fn can_raise(&self) -> fdo::Result<bool>;
     #[zbus(property)]
     fn identity(&self) -> fdo::Result<String>;
 }
@@ -110,17 +116,23 @@ pub mod player {
     }
 
     impl<'a> From<PlaybackStatus> for zvariant::Value<'a> {
-        fn from(value: PlaybackStatus) -> Self { value.to_string().into() }
+        fn from(value: PlaybackStatus) -> Self {
+            value.to_string().into()
+        }
     }
 
     impl From<PlaybackStatus> for String {
-        fn from(s: PlaybackStatus) -> Self { s.to_string() }
+        fn from(s: PlaybackStatus) -> Self {
+            s.to_string()
+        }
     }
 
     impl TryFrom<String> for PlaybackStatus {
         type Error = <Self as std::str::FromStr>::Err;
 
-        fn try_from(value: String) -> Result<Self, Self::Error> { value.parse() }
+        fn try_from(value: String) -> Result<Self, Self::Error> {
+            value.parse()
+        }
     }
 
     impl TryFrom<OwnedValue> for PlaybackStatus {

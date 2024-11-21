@@ -102,7 +102,9 @@ impl Player {
     //////// Accessors ////////
 
     #[inline]
-    pub fn status(&self) -> PlaybackStatus { self.status }
+    pub fn status(&self) -> PlaybackStatus {
+        self.status
+    }
 
     #[inline]
     pub fn update_status(&mut self, status: PlaybackStatus) -> Option<Instant> {
@@ -117,7 +119,9 @@ impl Player {
     }
 
     #[inline]
-    pub fn last_update(&self) -> Instant { self.last_update }
+    pub fn last_update(&self) -> Instant {
+        self.last_update
+    }
 
     #[inline]
     pub fn force_update(&mut self) -> Instant {
@@ -134,6 +138,16 @@ impl Player {
             BusName::Unique(u) => unreachable!("MPRIS bus had unique name {:?}", u.as_str()),
             BusName::WellKnown(w) => w,
         }
+    }
+
+    //////// Methods under MediaPlayer2 ////////
+
+    pub async fn raise(&mut self) -> Result {
+        timeout(&self.mp2, MediaPlayerProxy::raise)
+            .await
+            .context("Proxy call for Raise failed")?;
+
+        Ok(())
     }
 
     //////// Methods under MediaPlayer2.Player ////////
@@ -191,6 +205,12 @@ impl Player {
     }
 
     //////// Properties under MediaPlayer2 ////////
+
+    pub async fn can_raise(&self) -> Result<bool> {
+        timeout(&self.mp2, MediaPlayerProxy::can_raise)
+            .await
+            .context("Proxy property get for CanRaise failed")
+    }
 
     pub async fn identity(&self) -> Result<String> {
         timeout(&self.mp2, MediaPlayerProxy::identity)
@@ -329,7 +349,9 @@ impl MatchPlayer for Player {
             .unwrap_or("")
     }
 
-    fn status(&self) -> PlaybackStatus { self.status }
+    fn status(&self) -> PlaybackStatus {
+        self.status
+    }
 }
 
 trait IntoOption {
@@ -342,14 +364,18 @@ impl IntoOption for bool {
     type Output = ();
 
     #[inline]
-    fn into_option(self) -> Option<Self::Output> { self.then_some(()) }
+    fn into_option(self) -> Option<Self::Output> {
+        self.then_some(())
+    }
 }
 
 impl<T> IntoOption for Option<T> {
     type Output = T;
 
     #[inline]
-    fn into_option(self) -> Option<Self::Output> { self }
+    fn into_option(self) -> Option<Self::Output> {
+        self
+    }
 }
 
 macro_rules! action {
@@ -382,6 +408,11 @@ macro_rules! action {
     };
 }
 
+action!(
+    pub Raise: fn() -> (),
+    |Self, p| p.can_raise().await?,
+    |Self, p, ()| p.raise().await,
+);
 action!(
     pub Next: fn() -> (),
     |Self, p| p.can_go_next().await?,
