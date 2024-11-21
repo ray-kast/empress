@@ -1,6 +1,7 @@
 use std::{
     collections::HashMap,
     future::Future,
+    panic::AssertUnwindSafe,
     sync::{Arc, LazyLock},
     time::Instant,
 };
@@ -51,10 +52,9 @@ impl<'a> SignalMatcher<'a> {
 impl<'a> Drop for SignalMatcher<'a> {
     fn drop(&mut self) {
         // TODO: async drop wen eta son
-        assert!(
-            self.match_rule.is_none(),
-            "Signal matcher dropped without calling .shutdown()!"
-        );
+        if self.match_rule.is_some() {
+            warn!("Signal matcher dropped without calling .shutdown()!");
+        }
     }
 }
 
@@ -185,7 +185,7 @@ impl Server {
             .await
             .context("Error adding message match rule")?;
 
-        let matcher = SignalMatcher {
+        let mut matcher = SignalMatcher {
             dbus: self.dbus.clone(),
             match_rule: Some(mr),
         };
@@ -197,20 +197,32 @@ impl Server {
             .await
             .context("Error creating NameOwnerChanged listener")?;
 
-        Ok(tokio::spawn(self.background_scanner(
-            ctx,
-            stop_rx,
-            matcher,
-            msgs,
-            owner_changed,
-        )))
+        Ok(tokio::spawn(async move {
+            let shared = Arc::clone(&self.shared);
+            let res = AssertUnwindSafe(self.background_scanner(ctx, stop_rx, msgs, owner_changed))
+                .catch_unwind()
+                .await;
+
+            matcher
+                .shutdown()
+                .await
+                .map_err(|e| warn!("Error unregistering background scan matcher: {e:?}"))
+                .ok();
+
+            dispose::abort_on_panic(|| res.unwrap());
+
+            if Arc::strong_count(&shared) > 1 {
+                error!("Background scanner terminated unexpectedly!");
+
+                dispose::abort_on_panic(|| panic!("Background scanner terminated unexpectedly!"));
+            }
+        }))
     }
 
     async fn background_scanner(
         self,
         ctx: SignalEmitter<'_>,
         mut stop_rx: mpsc::Receiver<()>,
-        mut matcher: SignalMatcher<'_>,
         mut msgs: zbus::MessageStream,
         mut owner_changed: zbus::fdo::NameOwnerChangedStream,
     ) {
@@ -218,16 +230,6 @@ impl Server {
             Message(Result<Message, zbus::Error>),
             OwnerChanged(fdo::NameOwnerChanged),
         }
-
-        let _dfr = dispose::defer(|| {
-            // If the server still holds a reference to the player map then we
-            // are not supposed to be here
-            if Arc::strong_count(&self.shared) > 1 {
-                error!("Background scanner terminated unexpectedly!");
-
-                dispose::abort_on_panic(|| panic!("Background scanner terminated unexpectedly!"));
-            }
-        });
 
         while let Some(evt) = select! {
             msg = msgs.next() => msg.map(Event::Message),
@@ -291,14 +293,6 @@ impl Server {
                 s
             });
         }
-
-        matcher
-            .shutdown()
-            .await
-            .map_err(|e| warn!("Error unregistering background scan matcher: {e:?}"))
-            .ok();
-
-        drop(matcher);
     }
 
     // Returns true if the player list needs updating
@@ -364,10 +358,7 @@ impl Server {
         }
 
         if !invalidated.is_empty() {
-            trace!(
-                "properties on {:?} invalidated: {invalidated:?}",
-                sender.as_str(),
-            );
+            trace!("properties on {sender:?} invalidated: {invalidated:?}");
 
             for name in invalidated {
                 // TODO: find a more elegant way to do this

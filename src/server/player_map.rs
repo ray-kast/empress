@@ -117,14 +117,14 @@ impl PlayerMap {
         names: HashMap<UniqueName<'static>, WellKnownName<'static>>,
         mut changes: Option<&mut Vec<PlayerChange>>,
     ) {
-        let key_set: HashSet<_> = self.players.keys().cloned().collect();
-        let name_set: HashSet<_> = names.values().cloned().collect();
+        let curr_buses: HashSet<_> = self.players.keys().cloned().collect();
+        let new_buses: HashSet<_> = names.values().cloned().collect();
 
-        assert!(name_set.len() == names.len());
+        assert!(new_buses.len() == names.len());
         self.names = names;
         self.dead_names = DeadNameMap::new();
 
-        for name in key_set.difference(&name_set) {
+        for name in curr_buses.difference(&new_buses) {
             trace!("Removing player from map: {name:?}");
 
             if let Some(ref mut c) = changes {
@@ -133,7 +133,7 @@ impl PlayerMap {
             assert!(self.remove(name));
         }
 
-        for name in name_set.difference(&key_set) {
+        for name in new_buses.difference(&curr_buses) {
             let player = match Player::new(now, BusName::WellKnown(name.into()), conn).await {
                 Ok(p) => p,
                 Err(e) => {
@@ -142,8 +142,6 @@ impl PlayerMap {
                 },
             };
 
-            trace!("Adding new player to map: {player:?}");
-
             if let Some(ref mut c) = changes {
                 c.push(PlayerChange::Add(name.clone()));
             }
@@ -151,8 +149,8 @@ impl PlayerMap {
         }
 
         if try_patch {
-            for name in name_set.intersection(&key_set) {
-                let mut player = self.players.remove(name).unwrap();
+            for name in new_buses.intersection(&curr_buses) {
+                let mut player = self.get_mut(name).unwrap();
 
                 match player.refresh(now).await {
                     Ok(true) => {
@@ -166,9 +164,6 @@ impl PlayerMap {
                         continue;
                     },
                 }
-
-                trace!("Updating player in map: {player:?}");
-                assert!(self.put(player).is_none());
             }
         }
     }
@@ -239,14 +234,14 @@ impl PlayerMap {
 
         match self.players.entry(player.bus().to_owned()) {
             Entry::Vacant(v) => {
-                trace!("Inserting new player into map: {player:?}");
+                trace!("Inserting new player into map: {:?}", player.bus());
 
                 assert!(self.keys.insert(player.get_key()));
                 v.insert(player);
                 None
             },
             Entry::Occupied(o) => {
-                trace!("Patching existing player in map: {player:?}");
+                trace!("Patching existing player in map: {:?}", player.bus());
 
                 let value = o.into_mut();
                 update_key(&mut self.keys, &value.get_key(), &player);
