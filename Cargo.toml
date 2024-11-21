@@ -1,6 +1,6 @@
 [package]
 name = "empress"
-version = "3.0.0"
+version = "3.0.0-alpha.1"
 authors = ["raykast <me@june-s.net>"]
 edition = "2021"
 description = "A D-Bus MPRIS daemon for controlling media players."
@@ -22,7 +22,7 @@ strip = true
 anyhow = "1.0.91"
 async-trait = "0.1.83"
 clap = { version = "4.5.20", features = ["derive"] }
-dispose = { version = "0.5.1", git = "https://github.com/ray-kast/dispose", rev = "56cf752" }
+dispose = "0.5.1"
 env_logger = "0.11.5"
 futures-util = "0.3.31"
 lalrpop-util = { version = "0.22.0", features = ["lexer"] }
