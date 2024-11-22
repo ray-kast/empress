@@ -581,7 +581,7 @@ impl Server {
                 let metadata = player.metadata().await?;
 
                 let has_track = metadata
-                    .get(mpris::track_list::ATTR_TRACKID)
+                    .get(mpris::track_list::ATTR_TRACK_ID)
                     .map_or(false, |v| match **v {
                         Value::ObjectPath(ref p) => *p != mpris::track_list::NO_TRACK.as_ref(),
                         _ => false,

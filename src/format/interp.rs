@@ -35,7 +35,7 @@ pub enum Error {
     ExtraTopic(String),
     #[error("Error executing function {0:?}")]
     Ffi(String, #[source] ffi::Error),
-    #[error("Value {} has no field {1:?}", json(.0))]
+    #[error("Value {val} has no field {1:?}", val = json(.0))]
     BadPath(Value, String),
     #[error("Value {} has no index {}", json(.0), json(.1))]
     BadIndex(Value, Value),

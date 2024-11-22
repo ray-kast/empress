@@ -61,28 +61,71 @@ fn assert_path() {
 }
 
 #[derive(Parser)]
-#[command(author, about, version)]
-enum Opts {
+#[command(author, about, version, max_term_width = 80)]
+struct Opts {
+    #[command(flatten)]
+    log: LogOpts,
+
+    #[command(subcommand)]
+    cmd: Command,
+}
+
+#[derive(Default, clap::Args)]
+struct LogOpts {
+    /// Disable info logs (enabled by default if stderr is not a TTY)
+    #[arg(short, long, global = true)]
+    quiet: bool,
+
+    /// Enable info logs, even if stderr is not a TTY
+    #[arg(long, conflicts_with("quiet"), global = true)]
+    no_quiet: bool,
+
+    /// Output extra information to the console
+    #[arg(
+        short,
+        long,
+        global = true,
+        action(clap::ArgAction::Count),
+        conflicts_with("quiet"),
+        conflicts_with("no_quiet")
+    )]
+    verbose: u8,
+}
+
+impl LogOpts {
+    fn init(self) -> Result {
+        const VERBOSITY: [LevelFilter; 3] =
+            [LevelFilter::Info, LevelFilter::Debug, LevelFilter::Trace];
+        #[cfg(debug_assertions)]
+        const DEFAULT_V: u8 = 1;
+        #[cfg(not(debug_assertions))]
+        const DEFAULT_V: u8 = 0;
+
+        let Self {
+            quiet,
+            no_quiet,
+            verbose,
+        } = self;
+
+        env_logger::builder()
+            .parse_default_env()
+            .filter_level(
+                if quiet || !(no_quiet || verbose != 0 || std::io::stderr().is_terminal()) {
+                    LevelFilter::Warn
+                } else {
+                    VERBOSITY[usize::from(DEFAULT_V.saturating_add(verbose))
+                        .min(VERBOSITY.len().saturating_sub(1))]
+                },
+            )
+            .try_init()
+            .map_err(Into::into)
+    }
+}
+
+#[derive(clap::Subcommand)]
+enum Command {
     /// Launch a D-Bus service abstracting MPRIS players
-    Server {
-        /// Disable info logs (enabled by default if stderr is not a TTY)
-        #[arg(short, long)]
-        quiet: bool,
-
-        /// Enable info logs, even if stderr is not a TTY
-        #[arg(long, conflicts_with("quiet"))]
-        no_quiet: bool,
-
-        /// Output extra information to the console
-        #[arg(
-            short,
-            long,
-            action(clap::ArgAction::Count),
-            conflicts_with("quiet"),
-            conflicts_with("no_quiet")
-        )]
-        verbose: u8,
-    },
+    Server,
     #[command(flatten)]
     Client(ClientCommand),
 }
@@ -272,31 +315,13 @@ impl ::std::str::FromStr for Offset {
     }
 }
 
-fn log_init(v: u8, f: impl FnOnce(&mut env_logger::Builder)) -> Result {
-    const VERBOSITY: [LevelFilter; 3] = [LevelFilter::Info, LevelFilter::Debug, LevelFilter::Trace];
-    #[cfg(debug_assertions)]
-    const DEFAULT_V: u8 = 1;
-    #[cfg(not(debug_assertions))]
-    const DEFAULT_V: u8 = 0;
-
-    let mut b = env_logger::builder();
-
-    b.filter_level(
-        VERBOSITY[usize::from(DEFAULT_V.saturating_add(v)).min(VERBOSITY.len().saturating_sub(1))],
-    );
-
-    f(&mut b);
-
-    b.parse_default_env().try_init().map_err(Into::into)
-}
-
 fn main() {
     let result = run();
 
     match result {
         Ok(()) => (),
         Err(e) => {
-            log_init(0, |_| ()).ok();
+            LogOpts::default().init().ok();
 
             error!("{e:?}");
         },
@@ -309,27 +334,11 @@ fn run() -> Result {
         .build()
         .context("Error starting async runtime")?;
 
-    let opts = Opts::parse();
+    let Opts { log, cmd } = Opts::parse();
+    log.init().unwrap();
 
-    match opts {
-        Opts::Server {
-            quiet,
-            no_quiet,
-            verbose,
-        } => {
-            log_init(verbose, |b| {
-                if !(no_quiet || verbose != 0 || std::io::stderr().is_terminal()) || quiet {
-                    b.filter_level(LevelFilter::Warn);
-                }
-            })
-            .unwrap();
-
-            rt.block_on(server::run())
-        },
-        Opts::Client(id) => {
-            log_init(0, |_| ()).unwrap();
-
-            rt.block_on(client::run(id))
-        },
+    match cmd {
+        Command::Server => rt.block_on(server::run()),
+        Command::Client(id) => rt.block_on(client::run(id)),
     }
 }

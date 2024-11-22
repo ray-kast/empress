@@ -152,11 +152,51 @@ pub mod track_list {
 
     use super::OwnedObjectPath;
 
-    pub const ATTR_TRACKID: &str = "mpris:trackid";
+    /// Type: ObjectPath
+    pub const ATTR_TRACK_ID: &str = "mpris:trackid";
+    /// Type: i64
     pub const ATTR_LENGTH: &str = "mpris:length";
-    pub const ATTR_TITLE: &str = "xesam:title";
-    pub const ATTR_ARTIST: &str = "xesam:artist";
+    /// Type: Url
+    pub const ATTR_ART_URL: &str = "mpris:artUrl";
+
+    /// Type: String
     pub const ATTR_ALBUM: &str = "xesam:album";
+    /// Type: Vec<String>
+    pub const ATTR_ALBUM_ARTISTS: &str = "xesam:albumArtist";
+    /// Type: Vec<String>
+    pub const ATTR_ARTISTS: &str = "xesam:artist";
+    /// Type: String
+    pub const ATTR_LYRICS: &str = "xesam:asText";
+    /// Type: {integer}
+    pub const ATTR_BPM: &str = "xesam:audioBPM";
+    /// Type: f64 in [0.0, 1.0]
+    pub const ATTR_AUTO_RATING: &str = "xesam:autoRating";
+    /// Type: Vec<String>
+    pub const ATTR_COMMENTS: &str = "xesam:comment";
+    /// Type: Vec<String>
+    pub const ATTR_COMPOSERS: &str = "xesam:composer";
+    /// Type: DateTime
+    pub const ATTR_DATE_CREATED: &str = "xesam:contentCreated";
+    /// Type: {integer}
+    pub const ATTR_DISC_NUM: &str = "xesam:discNumber";
+    /// Type: DateTime
+    pub const ATTR_DATE_FIRST_PLAYED: &str = "xesam:firstUsed";
+    /// Type: Vec<String>
+    pub const ATTR_GENRES: &str = "xesam:genre";
+    /// Type: DateTime
+    pub const ATTR_DATE_LAST_PLAYED: &str = "xesam:lastUsed";
+    /// Type: Vec<String>
+    pub const ATTR_LYRICISTS: &str = "xesam:lyricist";
+    /// Type: String
+    pub const ATTR_TITLE: &str = "xesam:title";
+    /// Type: {integer}
+    pub const ATTR_TRACK_NUM: &str = "xesam:trackNumber";
+    /// Type: Url
+    pub const ATTR_URL: &str = "xesam:url";
+    /// Type: {integer}
+    pub const ATTR_PLAY_COUNT: &str = "xesam:useCount";
+    /// Type: f64 in [0.0, 1.0]
+    pub const ATTR_USER_RATING: &str = "xesam:userRating";
 
     pub static NO_TRACK: LazyLock<OwnedObjectPath> = LazyLock::new(|| {
         "/org/mpris/MediaPlayer2/TrackList/NoTrack"

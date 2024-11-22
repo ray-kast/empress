@@ -298,7 +298,7 @@ impl Player {
         };
 
         self.set_position(
-            meta.get(mpris::track_list::ATTR_TRACKID)
+            meta.get(mpris::track_list::ATTR_TRACK_ID)
                 .context("Missing track ID in metadata")?
                 .downcast_ref::<&ObjectPath>()
                 .map(ObjectPath::as_ref)?,

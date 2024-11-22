@@ -9,7 +9,7 @@ use super::interp::{json, Context, CowValue, StreamError, Value};
 pub enum Error {
     #[error("Expected {0} argument(s), got {1}")]
     Arity(usize, usize),
-    #[error("Type error: expected {0}, got {}", json(.1))]
+    #[error("Type error: expected {0}, got {actual}", actual = json(.1))]
     Type(&'static str, Value),
     #[error("Expected a pipe input, got nothing")]
     NoTopic,

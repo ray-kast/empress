@@ -29,16 +29,36 @@ VALUE REFERENCE
 To see the values available to format strings, simply run the now-playing command without any format string and the raw JSON will be printed.  Currently, the values provided are:
 
 {
-  "status": string, // one of 'Playing', 'Paused', or 'Stopped'
+  "status": string,           // one of 'Playing', 'Paused', or 'Stopped'
   "player": {
     "bus": string,
     "id": string,
   },
-  "title": string?,
-  "artist": string[]?,
-  "album": string?,
-  "length": int64?,
   "position": int64?,
+
+  "trackId": string?,
+  "length": int64?,
+  "artUrl": string?,
+
+  "album": string?,
+  "albumArtists": string[]?,
+  "artists": string[]?,
+  "lyrics": string?,
+  "bpm": integer?,
+  "autoRating": double?,
+  "comments": string[]?,
+  "composers": string[]?,
+  "dateCreated": string?,     // Formatted as a local DateTime
+  "discNum": integer?,
+  "dateFirstPlayed": string?, // Formatted as a local DateTime
+  "genres": string[]?,
+  "dateLastPlayed": string?,  // Formatted as a local DateTime
+  "lyricists": string[]?,
+  "title": string?,
+  "trackNum": integer?,
+  "url": string?,
+  "playCount": integer?,
+  "userRating": double?,
 }
 
 FUNCTION REFERENCE

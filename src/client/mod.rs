@@ -2,9 +2,13 @@ use std::{future::Future, io, io::IsTerminal, time::Duration};
 
 use anyhow::{Context, Error};
 use futures_util::StreamExt;
+use jiff::civil::DateTime;
 use log::{info, trace, warn};
 use serde::Serialize;
-use zbus::connection;
+use zbus::{
+    connection,
+    zvariant::{ObjectPath, OwnedValue},
+};
 
 use self::proxy::EmpressProxy;
 use crate::{
@@ -30,11 +34,86 @@ struct NowPlayingPlayer {
 struct NowPlayingResult {
     status: PlaybackStatus,
     player: NowPlayingPlayer,
-    title: Option<String>,
-    artist: Option<Vec<String>>,
-    album: Option<String>,
-    length: Option<i64>,
     position: Option<i64>,
+
+    track_id: Option<String>,
+    length: Option<i64>,
+    art_url: Option<String>,
+
+    album: Option<String>,
+    album_artists: Option<Vec<String>>,
+    artists: Option<Vec<String>>,
+    lyrics: Option<String>,
+    bpm: Option<i64>,
+    auto_rating: Option<f64>,
+    comments: Option<Vec<String>>,
+    composers: Option<Vec<String>>,
+    date_created: Option<DateTime>,
+    disc_num: Option<i64>,
+    date_first_played: Option<DateTime>,
+    genres: Option<Vec<String>>,
+    date_last_played: Option<DateTime>,
+    lyricists: Option<Vec<String>>,
+    title: Option<String>,
+    track_num: Option<i64>,
+    url: Option<String>,
+    play_count: Option<i64>,
+    user_rating: Option<f64>,
+}
+
+macro_rules! extract {
+    ($meta:ident { $($key:ident => $var:ident ($conv:expr)),* $(,)? }) => {
+        $(
+            let $var = $meta
+                .remove(mpris::track_list::$key)
+                .and_then(|v| {
+                    $conv(v)
+                        .context(concat!(
+                            "Error parsing field \"",
+                            stringify!($var),
+                            "\" of player status",
+                        ))
+                        .map_err(|e| warn!("{:?}", e))
+                        .ok()
+                });
+        )*
+    };
+}
+
+#[allow(clippy::needless_pass_by_value)]
+fn parse_path(val: OwnedValue) -> Result<String, zbus::zvariant::Error> {
+    val.downcast_ref::<ObjectPath>()
+        .map(|p| p.to_string())
+        .or_else(|_| String::try_from(val))
+}
+
+#[allow(clippy::needless_pass_by_value)]
+fn parse_i64(val: OwnedValue) -> Result<i64> {
+    i64::try_from(&val)
+        .or_else(|_| i32::try_from(&val).map(Into::into))
+        .context("Error downcasting i64/i32")
+        .or_else(|_| {
+            u64::try_from(&val)
+                .context("Error downcasting u64")
+                .and_then(|u| u.try_into().context("Error converting u64 to i64"))
+        })
+}
+
+#[allow(clippy::needless_pass_by_value)]
+fn parse_datetime(val: OwnedValue) -> Result<DateTime> {
+    let s = val
+        .downcast_ref::<&str>()
+        .context("Unable to downcast value to string")?;
+    let tz = jiff::tz::TimeZone::system();
+
+    s.parse::<jiff::Timestamp>()
+        .map(|t| t.to_zoned(tz.clone()).datetime())
+        .or_else(|_| {
+            s.parse::<jiff::Zoned>()
+                .map(|z| z.with_time_zone(tz).datetime())
+        })
+        .or_else(|_| s.parse::<DateTime>())
+        .context("Error parsing date string")
 }
 
 impl TryFrom<PlayerStatus> for NowPlayingResult {
@@ -56,35 +135,72 @@ impl TryFrom<PlayerStatus> for NowPlayingResult {
             PlayerStatusKind::Default => (Some(bus), Some(ident), Some(position)),
         };
 
-        let title = metadata
-            .remove(mpris::track_list::ATTR_TITLE)
-            .and_then(|v| v.try_into().ok());
-        let artist = metadata
-            .remove(mpris::track_list::ATTR_ARTIST)
-            .and_then(|v| v.try_into().ok());
-        let album = metadata
-            .remove(mpris::track_list::ATTR_ALBUM)
-            .and_then(|v| v.try_into().ok());
-        let length = metadata
-            .remove(mpris::track_list::ATTR_LENGTH)
-            .and_then(|v| v.try_into().ok());
+        extract!(metadata {
+            ATTR_TRACK_ID => track_id(parse_path),
+            ATTR_LENGTH => length(parse_i64),
+            ATTR_ART_URL => art_url(String::try_from),
+
+            ATTR_ALBUM => album(String::try_from),
+            ATTR_ALBUM_ARTISTS => album_artists(Vec::try_from),
+            ATTR_ARTISTS => artists(Vec::try_from),
+            ATTR_LYRICS => lyrics(String::try_from),
+            ATTR_BPM => bpm(parse_i64),
+            ATTR_AUTO_RATING => auto_rating(f64::try_from),
+            ATTR_COMMENTS => comments(Vec::try_from),
+            ATTR_COMPOSERS => composers(Vec::try_from),
+            ATTR_DATE_CREATED => date_created(parse_datetime),
+            ATTR_DISC_NUM => disc_num(parse_i64),
+            ATTR_DATE_FIRST_PLAYED => date_first_played(parse_datetime),
+            ATTR_GENRES => genres(Vec::try_from),
+            ATTR_DATE_LAST_PLAYED => date_last_played(parse_datetime),
+            ATTR_LYRICISTS => lyricists(Vec::try_from),
+            ATTR_TITLE => title(String::try_from),
+            ATTR_TRACK_NUM => track_num(parse_i64),
+            ATTR_URL => url(String::try_from),
+            ATTR_PLAY_COUNT => play_count(parse_i64),
+            ATTR_USER_RATING => user_rating(f64::try_from),
+        });
+
+        trace!("Unused metadata for status: {metadata:?}");
 
         Ok(Self {
             status,
             player: NowPlayingPlayer { bus, id },
-            title,
-            artist,
-            album,
-            length,
             position,
+            track_id,
+            length,
+            art_url,
+            album,
+            album_artists,
+            artists,
+            lyrics,
+            bpm,
+            auto_rating,
+            comments,
+            composers,
+            date_created,
+            disc_num,
+            date_first_played,
+            genres,
+            date_last_played,
+            lyricists,
+            title,
+            track_num,
+            url,
+            play_count,
+            user_rating,
         })
     }
 }
 
 impl MatchPlayer for NowPlayingResult {
-    fn bus(&self) -> &str { self.player.bus.as_ref().map_or("", |s| s) }
+    fn bus(&self) -> &str {
+        self.player.bus.as_ref().map_or("", |s| s)
+    }
 
-    fn status(&self) -> PlaybackStatus { self.status }
+    fn status(&self) -> PlaybackStatus {
+        self.status
+    }
 }
 
 macro_rules! courtesy_line {
