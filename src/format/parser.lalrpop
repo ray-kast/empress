@@ -50,18 +50,20 @@ NullPipeline: ast::NullPipeline<'i> = {
 };
 
 Pipeline: ast::Pipeline<'i> = {
-  <l:Pipeline> "|" <r:Lens> => ast::Pipeline::Pipe(Box::new(l), r),
-  Lens => ast::Pipeline::Lens(<>),
+  <l:Pipeline> "|" <r:Member> => ast::Pipeline::Pipe(Box::new(l), r),
+  Member => ast::Pipeline::Member(<>),
 };
 
-Lens: ast::Lens<'i> = {
-  <l:Lens> "." <r:Ident> => ast::Lens::Dot(Box::new(l), r),
-  <l:Lens> "[" <r:Expr> "]" => ast::Lens::Index(Box::new(l), r),
-  Prim => ast::Lens::Prim(<>),
+Member: ast::Member<'i> = {
+  <l:Member> "." <r:Ident> => ast::Member::Dot(Box::new(l), r),
+  <l:Member> "[" <r:Expr> "]" => ast::Member::Index(Box::new(l), r),
+  Prim => ast::Member::Prim(<>),
 };
 
 Prim: ast::Prim<'i> = {
   "(" <Expr> ")" => ast::Prim::Paren(<>),
+  "." <Ident> => ast::Prim::LensIdent(<>),
+  "." "[" <Expr> "]" => ast::Prim::LensIndex(<>),
   <Ident> "(" <Args?> ")" => ast::Prim::Call(<>),
   "[" <Args?> "]" => ast::Prim::Array(<>),
   Ident => ast::Prim::Ident(<>),

@@ -16,11 +16,13 @@ Function calls take the form {{ ident(arg1, arg2, ...) }}.  See below for a list
 
 Any expression can be wrapped in parentheses for clarity - {{ (12) }} is equivalent to {{ 12 }}, etc.
 
-Values in an array or an object can be accessed using the index operator.  For example {{ artist[0] }} retrieves the first artist and {{ player["id"] }} retrieves the player name.  Indexing into a value with an invalid index will throw an error.
+Values in an array or an object can be accessed using the index operator.  For example {{ artists[0] }} retrieves the first artist and {{ player["id"] }} retrieves the player name.  Indexing into a value with an invalid index will throw an error.
 
 Expressions can be piped through functions using the | (pipe) operator.  When calling a pipe function with no arguments, parentheses are optional, so {{ "hi" | lower() }} is equivalent to {{ "hi" | lower }}.  You can chain as many functions together using pipes as you like.
 
 Additionally, the null-propagating pipe |! can be used for values that may be null passed to functions that don't accept null.  If a null value is piped with |!, the right side of the pipeline is ignored and the entire pipeline returns null.  For example, {{ position | time }} will fail on players that don't report playback position, but {{ position |! time }} will succeed and print nothing.
+
+Pipes and indexes/member accesses can be chained with {{ ... | .member }} or {{ ... | .[index] }}.  This is particularly useful with the null-propagating pipe, as something like {{ artists |! .[0] }} will not throw an error if artists is null.
 
 To provide a fallback value in case an expression is blank the ?? (null-coalescing) operator can be used.  For instance, to handle players that can return null for the album field, one might use {{ album ?? "Unknown album" }}.
 

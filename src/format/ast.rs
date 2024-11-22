@@ -3,7 +3,8 @@ use std::borrow::Cow::{Borrowed, Owned};
 use super::{
     ffi,
     interp::{
-        assert_no_topic, is_null_like, Context, CowValue, Error, Eval, Result, Stream, Value,
+        assert_no_topic, assert_topic, is_null_like, Context, CowValue, Error, Eval, Result,
+        Stream, Value,
     },
 };
 
@@ -85,8 +86,8 @@ impl<'a, 's> Eval<'a> for NullPipeline<'s> {
 
 #[derive(Debug)]
 pub enum Pipeline<'a> {
-    Pipe(Box<Pipeline<'a>>, Lens<'a>),
-    Lens(Lens<'a>),
+    Pipe(Box<Pipeline<'a>>, Member<'a>),
+    Member(Member<'a>),
 }
 
 impl<'a, 's> Eval<'a> for Pipeline<'s> {
@@ -95,61 +96,75 @@ impl<'a, 's> Eval<'a> for Pipeline<'s> {
     fn eval(self, ctx: &'a Context, topic: Option<CowValue<'a>>) -> Result<CowValue<'a>> {
         match self {
             Self::Pipe(p, l) => l.eval(ctx, Some(p.eval(ctx, topic)?)),
-            Self::Lens(l) => l.eval(ctx, topic),
+            Self::Member(l) => l.eval(ctx, topic),
         }
     }
 }
 
+fn lens_ident<'a, 's>(lhs: CowValue<'a>, rhs: &'s str) -> Result<CowValue<'a>> {
+    match lhs {
+        Owned(Value::Object(mut m)) if m.contains_key(rhs) => {
+            Ok(Owned(m.remove(rhs).unwrap_or_else(|| unreachable!())))
+        },
+        Borrowed(Value::Object(m)) if m.contains_key(rhs) => {
+            Ok(Borrowed(m.get(rhs).unwrap_or_else(|| unreachable!())))
+        },
+        l => Err(Error::BadPath(l.into_owned(), rhs.into())),
+    }
+}
+
+fn lens_index<'a, R: Eval<'a, Output = CowValue<'a>>>(
+    ctx: &'a Context,
+    lhs: CowValue<'a>,
+    rhs: R,
+) -> Result<CowValue<'a>> {
+    fn as_usize(i: &Value) -> Option<usize> {
+        i.as_u64().and_then(|i| i.try_into().ok())
+    }
+
+    fn array_has_idx(a: &[Value], i: &Value) -> bool {
+        as_usize(i).map_or(false, |i| a.len() > i)
+    }
+
+    fn object_has_idx(m: &serde_json::Map<String, Value>, i: &Value) -> bool {
+        i.as_str().map_or(false, |i| m.contains_key(i))
+    }
+
+    match (lhs, rhs.eval(ctx, None)?) {
+        (Owned(Value::Array(mut a)), r) if array_has_idx(&a, &r) => Ok(Owned(
+            a.remove(as_usize(&r).unwrap_or_else(|| unreachable!())),
+        )),
+        (Borrowed(Value::Array(a)), r) if array_has_idx(a, &r) => {
+            Ok(Borrowed(&a[as_usize(&r).unwrap_or_else(|| unreachable!())]))
+        },
+        (Owned(Value::Object(mut m)), r) if object_has_idx(&m, &r) => Ok(Owned(
+            r.as_str()
+                .and_then(|r| m.remove(r))
+                .unwrap_or_else(|| unreachable!()),
+        )),
+        (Borrowed(Value::Object(m)), r) if object_has_idx(m, &r) => Ok(Borrowed(
+            r.as_str()
+                .and_then(|r| m.get(r))
+                .unwrap_or_else(|| unreachable!()),
+        )),
+        (l, r) => Err(Error::BadIndex(l.into_owned(), r.into_owned())),
+    }
+}
+
 #[derive(Debug)]
-pub enum Lens<'a> {
-    Dot(Box<Lens<'a>>, &'a str),
-    Index(Box<Lens<'a>>, Expr<'a>),
+pub enum Member<'a> {
+    Dot(Box<Member<'a>>, &'a str),
+    Index(Box<Member<'a>>, Expr<'a>),
     Prim(Prim<'a>),
 }
 
-impl<'a, 's> Eval<'a> for Lens<'s> {
+impl<'a, 's> Eval<'a> for Member<'s> {
     type Output = CowValue<'a>;
 
     fn eval(self, ctx: &'a Context, topic: Option<CowValue<'a>>) -> Result<CowValue<'a>> {
-        fn as_usize(i: &Value) -> Option<usize> { i.as_u64().and_then(|i| i.try_into().ok()) }
-
-        fn array_has_idx(a: &[Value], i: &Value) -> bool {
-            as_usize(i).map_or(false, |i| a.len() > i)
-        }
-
-        fn object_has_idx(m: &serde_json::Map<String, Value>, i: &Value) -> bool {
-            i.as_str().map_or(false, |i| m.contains_key(i))
-        }
-
         match self {
-            Self::Dot(l, r) => match l.eval(ctx, topic)? {
-                Owned(Value::Object(mut m)) if m.contains_key(r) => {
-                    Ok(Owned(m.remove(r).unwrap_or_else(|| unreachable!())))
-                },
-                Borrowed(Value::Object(m)) if m.contains_key(r) => {
-                    Ok(Borrowed(m.get(r).unwrap_or_else(|| unreachable!())))
-                },
-                l => Err(Error::BadPath(l.into_owned(), r.into())),
-            },
-            Self::Index(l, r) => match (l.eval(ctx, topic)?, r.eval(ctx, None)?) {
-                (Owned(Value::Array(mut a)), r) if array_has_idx(&a, &r) => Ok(Owned(
-                    a.remove(as_usize(&r).unwrap_or_else(|| unreachable!())),
-                )),
-                (Borrowed(Value::Array(a)), r) if array_has_idx(a, &r) => {
-                    Ok(Borrowed(&a[as_usize(&r).unwrap_or_else(|| unreachable!())]))
-                },
-                (Owned(Value::Object(mut m)), r) if object_has_idx(&m, &r) => Ok(Owned(
-                    r.as_str()
-                        .and_then(|r| m.remove(r))
-                        .unwrap_or_else(|| unreachable!()),
-                )),
-                (Borrowed(Value::Object(m)), r) if object_has_idx(m, &r) => Ok(Borrowed(
-                    r.as_str()
-                        .and_then(|r| m.get(r))
-                        .unwrap_or_else(|| unreachable!()),
-                )),
-                (l, r) => Err(Error::BadIndex(l.into_owned(), r.into_owned())),
-            },
+            Self::Dot(l, r) => lens_ident(l.eval(ctx, topic)?, r),
+            Self::Index(l, r) => lens_index(ctx, l.eval(ctx, topic)?, r),
             Self::Prim(p) => p.eval(ctx, topic),
         }
     }
@@ -158,6 +173,8 @@ impl<'a, 's> Eval<'a> for Lens<'s> {
 #[derive(Debug)]
 pub enum Prim<'a> {
     Paren(Expr<'a>),
+    LensIdent(&'a str),
+    LensIndex(Expr<'a>),
     Call(&'a str, Option<Args<'a>>),
     Array(Option<Args<'a>>),
     Ident(&'a str),
@@ -172,8 +189,14 @@ impl<'a, 's> Eval<'a> for Prim<'s> {
             assert_no_topic(&topic, &self)?;
         }
 
+        if matches!(self, Self::LensIdent(_) | Self::LensIndex(_)) {
+            assert_topic(&topic, &self)?;
+        }
+
         match self {
             Self::Paren(e) => e.eval(ctx, topic),
+            Self::LensIdent(i) => lens_ident(topic.unwrap_or_else(|| unreachable!()), i),
+            Self::LensIndex(e) => lens_index(ctx, topic.unwrap_or_else(|| unreachable!()), e),
             Self::Call(i, a) => {
                 ctx.functions
                     .get(i)

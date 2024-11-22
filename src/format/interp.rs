@@ -18,6 +18,13 @@ pub(super) fn assert_no_topic<D: Debug>(topic: &Option<CowValue>, d: &D) -> Resu
     }
 }
 
+pub(super) fn assert_topic<'a, D: Debug>(topic: &Option<CowValue<'a>>, d: &D) -> Result<()> {
+    match topic {
+        Some(_) => Ok(()),
+        None => Err(Error::NoTopic(format!("{d:?}"))),
+    }
+}
+
 #[inline]
 pub(super) fn is_null_like(val: &Value) -> bool {
     match val {
@@ -31,6 +38,8 @@ pub(super) fn is_null_like(val: &Value) -> bool {
 pub enum Error {
     #[error("Error writing format output")]
     Stream(#[source] StreamError),
+    #[error("No pipe input available when evaluating {0}")]
+    NoTopic(String),
     #[error("Unexpected pipe input when evaluating {0}")]
     ExtraTopic(String),
     #[error("Error executing function {0:?}")]
