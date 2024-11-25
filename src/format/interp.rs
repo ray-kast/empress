@@ -18,7 +18,7 @@ pub(super) fn assert_no_topic<D: Debug>(topic: &Option<CowValue>, d: &D) -> Resu
     }
 }
 
-pub(super) fn assert_topic<'a, D: Debug>(topic: &Option<CowValue<'a>>, d: &D) -> Result<()> {
+pub(super) fn assert_topic<D: Debug>(topic: &Option<CowValue<'_>>, d: &D) -> Result<()> {
     match topic {
         Some(_) => Ok(()),
         None => Err(Error::NoTopic(format!("{d:?}"))),

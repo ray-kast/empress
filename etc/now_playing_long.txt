@@ -22,6 +22,8 @@ Expressions can be piped through functions using the | (pipe) operator.  When ca
 
 Additionally, the null-propagating pipe |! can be used for values that may be null passed to functions that don't accept null.  If a null value is piped with |!, the right side of the pipeline is ignored and the entire pipeline returns null.  For example, {{ position | time }} will fail on players that don't report playback position, but {{ position |! time }} will succeed and print nothing.
 
+Function arguments can be suffixed with the ! (null-propagating) operator.  If a function argument with ! is null, evaluation of the function will be skipped and the entire result will be null instead.  This is useful to avoid errors with functions that cannot accept null arguments, for example {{ position |! eta(length!) }} will simply print nothing rather than throwing an error if length is null.
+
 Pipes and indexes/member accesses can be chained with {{ ... | .member }} or {{ ... | .[index] }}.  This is particularly useful with the null-propagating pipe, as something like {{ artists |! .[0] }} will not throw an error if artists is null.
 
 To provide a fallback value in case an expression is blank the ?? (null-coalescing) operator can be used.  For instance, to handle players that can return null for the album field, one might use {{ album ?? "Unknown album" }}.

@@ -30,6 +30,7 @@ pub enum Token<'a> {
     BlockEnd,
 
     Dot,
+    Bang,
     Comma,
     PipeBang,
     Pipe,
@@ -50,6 +51,7 @@ impl<'a> Token<'a> {
             Bit::BlockEnd => Token::BlockEnd,
 
             Bit::Dot => Token::Dot,
+            Bit::Bang => Token::Bang,
             Bit::Comma => Token::Comma,
             Bit::PipeBang => Token::PipeBang,
             Bit::Pipe => Token::Pipe,
@@ -75,6 +77,7 @@ enum Bit<'a> {
 
     Whitespace,
     Dot,
+    Bang,
     Comma,
     PipeBang,
     Pipe,
@@ -215,6 +218,7 @@ fn token() -> impl FnMut(&str) -> BResult {
                 btag("}}", Bit::BlockEnd),
                 space,
                 btag(".", Bit::Dot),
+                btag("!", Bit::Bang),
                 btag(",", Bit::Comma),
                 btag("|!", Bit::PipeBang),
                 btag("|", Bit::Pipe),

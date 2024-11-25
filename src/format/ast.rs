@@ -101,7 +101,7 @@ impl<'a, 's> Eval<'a> for Pipeline<'s> {
     }
 }
 
-fn lens_ident<'a, 's>(lhs: CowValue<'a>, rhs: &'s str) -> Result<CowValue<'a>> {
+fn lens_ident<'a>(lhs: CowValue<'a>, rhs: &str) -> Result<CowValue<'a>> {
     match lhs {
         Owned(Value::Object(mut m)) if m.contains_key(rhs) => {
             Ok(Owned(m.remove(rhs).unwrap_or_else(|| unreachable!())))
@@ -198,21 +198,25 @@ impl<'a, 's> Eval<'a> for Prim<'s> {
             Self::LensIdent(i) => lens_ident(topic.unwrap_or_else(|| unreachable!()), i),
             Self::LensIndex(e) => lens_index(ctx, topic.unwrap_or_else(|| unreachable!()), e),
             Self::Call(i, a) => {
+                let Some(args) = a.map_or_else(|| Ok(Some(vec![])), |a| a.eval(ctx, None))? else {
+                    return Ok(Owned(Value::Null));
+                };
+
                 ctx.functions
                     .get(i)
                     .ok_or_else(|| Error::NoFunction(i.into()))?(ffi::Input::new(
-                    ctx,
-                    topic,
-                    a.map_or_else(|| Ok(vec![]), |a| a.eval(ctx, None))?,
+                    ctx, topic, args,
                 ))
                 .map_err(|e| Error::Ffi(i.into(), e))
             },
             Self::Array(a) => a
-                .map_or_else(|| Ok(vec![]), |a| a.eval(ctx, None))
+                .map_or_else(|| Ok(Some(vec![])), |a| a.eval(ctx, None))
                 .map(|v| {
-                    Owned(Value::Array(
-                        v.into_iter().map(CowValue::into_owned).collect(),
-                    ))
+                    v.map_or(Owned(Value::Null), |v| {
+                        Owned(Value::Array(
+                            v.into_iter().map(CowValue::into_owned).collect(),
+                        ))
+                    })
                 }),
             Self::Ident(i) => match topic {
                 // A little hacky, but if a topic is present treat idents as a
@@ -230,23 +234,52 @@ impl<'a, 's> Eval<'a> for Prim<'s> {
 
 #[derive(Debug)]
 pub enum Args<'a> {
-    Comma(Box<Args<'a>>, Expr<'a>),
-    Expr(Expr<'a>),
+    Comma(Box<Args<'a>>, Arg<'a>),
+    Arg(Arg<'a>),
 }
 
 impl<'a, 's> Eval<'a> for Args<'s> {
-    type Output = Vec<CowValue<'a>>;
+    type Output = Option<Vec<CowValue<'a>>>;
 
-    fn eval(self, ctx: &'a Context, topic: Option<CowValue<'a>>) -> Result<Vec<CowValue<'a>>> {
+    fn eval(
+        self,
+        ctx: &'a Context,
+        topic: Option<CowValue<'a>>,
+    ) -> Result<Option<Vec<CowValue<'a>>>> {
+        match self {
+            Self::Comma(l, r) => {
+                let Some(mut vec) = l.eval(ctx, topic.clone())? else {
+                    return Ok(None);
+                };
+                let Some(val) = r.eval(ctx, topic)? else {
+                    return Ok(None);
+                };
+                vec.push(val);
+                Ok(Some(vec))
+            },
+            Self::Arg(e) => e.eval(ctx, topic).map(|v| v.map(|v| vec![v])),
+        }
+    }
+}
+
+#[derive(Debug)]
+pub enum Arg<'a> {
+    Coerce(Expr<'a>),
+    Expr(Expr<'a>),
+}
+
+impl<'a, 's> Eval<'a> for Arg<'s> {
+    type Output = Option<CowValue<'a>>;
+
+    fn eval(self, ctx: &'a Context, topic: Option<CowValue<'a>>) -> Result<Option<CowValue<'a>>> {
         assert_no_topic(&topic, &self)?;
 
         match self {
-            Self::Comma(l, r) => {
-                let mut vec = l.eval(ctx, None)?;
-                vec.push(r.eval(ctx, None)?);
-                Ok(vec)
-            },
-            Self::Expr(e) => e.eval(ctx, None).map(|v| vec![v]),
+            Arg::Coerce(e) => Ok(match e.eval(ctx, topic)? {
+                Owned(Value::Null) | Borrowed(Value::Null) => None,
+                v => Some(v),
+            }),
+            Arg::Expr(e) => e.eval(ctx, topic).map(Some),
         }
     }
 }

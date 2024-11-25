@@ -12,6 +12,7 @@ extern {
     "}}" => lexer::Token::BlockEnd,
 
     "." => lexer::Token::Dot,
+    "!" => lexer::Token::Bang,
     "," => lexer::Token::Comma,
     "|!" => lexer::Token::PipeBang,
     "|" => lexer::Token::Pipe,
@@ -72,7 +73,11 @@ Prim: ast::Prim<'i> = {
 };
 
 Args: ast::Args<'i> = {
-  <l:Args> "," <r:Expr> => ast::Args::Comma(Box::new(l), r),
-  Expr => ast::Args::Expr(<>),
+  <l:Args> "," <r:Arg> => ast::Args::Comma(Box::new(l), r),
+  Arg => ast::Args::Arg(<>),
 };
 
+Arg: ast::Arg<'i> = {
+  <Expr> "!" => ast::Arg::Coerce(<>),
+  Expr => ast::Arg::Expr(<>),
+};
