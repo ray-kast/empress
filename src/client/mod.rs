@@ -211,13 +211,9 @@ impl TryFrom<PlayerStatus> for NowPlayingResult {
 }
 
 impl MatchPlayer for NowPlayingResult {
-    fn bus(&self) -> &str {
-        self.player.bus.as_ref().map_or("", |s| s)
-    }
+    fn bus(&self) -> &str { self.player.bus.as_ref().map_or("", |s| s) }
 
-    fn status(&self) -> PlaybackStatus {
-        self.status
-    }
+    fn status(&self) -> PlaybackStatus { self.status }
 }
 
 macro_rules! courtesy_line {
@@ -296,7 +292,8 @@ pub(super) async fn run(cmd: ClientCommand) -> Result {
             player,
             format,
             watch,
-        } => now_playing(proxy, player, format, watch).await?,
+            zero,
+        } => now_playing(proxy, player, format, watch, zero).await?,
         ClientCommand::Seek {
             player,
             to: Offset::Relative(to),
@@ -340,11 +337,20 @@ pub(super) async fn run(cmd: ClientCommand) -> Result {
     Ok(())
 }
 
+fn now_playing_sep(zero: bool) -> char {
+    if zero {
+        '\0'
+    } else {
+        '\n'
+    }
+}
+
 async fn now_playing(
     proxy: Timeout<EmpressProxy<'_>>,
     player: PlayerOpts,
     format: Option<String>,
     watch: bool,
+    zero: bool,
 ) -> Result {
     let player = player.into();
 
@@ -360,12 +366,16 @@ async fn now_playing(
     trace!("Full now-playing response: {status:?}");
     let status = status.try_into()?;
     let format = format.as_deref();
-    let last = print_now_playing(&status, format, None, || ())?;
+    let last = print_now_playing(
+        &status,
+        format,
+        watch.then(|| now_playing_sep(zero)),
+        None,
+        || (),
+    )?;
 
     if watch {
-        println!();
-
-        watch_now_playing(proxy, player, format, status, last).await
+        watch_now_playing(proxy, player, format, zero, status, last).await
     } else {
         courtesy_line!();
 
@@ -377,6 +387,7 @@ async fn watch_now_playing(
     proxy: Timeout<EmpressProxy<'_>>,
     player: server::PlayerOpts,
     format: Option<&str>,
+    zero: bool,
     mut status: NowPlayingResult,
     mut last: Option<String>,
 ) -> Result<()> {
@@ -389,6 +400,13 @@ async fn watch_now_playing(
 
     const MICROS_PER_SEC: i64 = 1_000_000;
     const THROTTLE_MILLIS: u32 = 60;
+
+    fn sep(zero: bool) {
+        use std::io::prelude::*;
+        let mut io = std::io::stdout();
+        write!(io, "{}", now_playing_sep(zero)).unwrap();
+        io.flush().unwrap();
+    }
 
     async fn tick(status: &NowPlayingResult) -> Option<Event<'static>> {
         if status.status != PlaybackStatus::Playing {
@@ -424,6 +442,8 @@ async fn watch_now_playing(
             Some(Event::TickThrottled)
         }
     }
+
+    sep(zero);
 
     let mut position = status.capture_position();
 
@@ -479,7 +499,9 @@ async fn watch_now_playing(
             Event::Stop(r) => break r.context("Error catching ^C"),
         }
 
-        last = print_now_playing(&status, format, last, || println!())?;
+        last = print_now_playing(&status, format, Some(now_playing_sep(zero)), last, || {
+            sep(zero);
+        })?;
     }
 }
 
@@ -487,11 +509,16 @@ async fn watch_now_playing(
 fn print_now_playing(
     status: &NowPlayingResult,
     format: Option<&str>,
+    sep: Option<char>,
     last: Option<String>,
     post_print: impl FnOnce(),
 ) -> Result<Option<String>> {
     if let Some(format) = format {
-        let s = format::eval(format, status)?;
+        let mut s = format::eval(format, status)?;
+
+        if let Some(c) = sep {
+            s = s.replace(c, " ");
+        }
 
         if last.is_none_or(|l| l != s) {
             print!("{s}");

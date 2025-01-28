@@ -147,12 +147,15 @@ enum ClientCommand {
         #[arg(short, long)]
         format: Option<String>,
 
-        // TODO: pretty sure watch should conflict with any player filters being
-        //       set
         /// Continue watching for changes to playback status and printing
         /// updates
-        #[arg(short, long)]
+        #[arg(short, long, conflicts_with("PlayerOpts"))]
         watch: bool,
+
+        /// Separate outputs with a null byte rather than a newline.  Only
+        /// usable with the -w flag.
+        #[arg(short = '0', long, requires("watch"))]
+        zero: bool,
     },
     /// Focus a player
     Raise(PlayerOpts),
