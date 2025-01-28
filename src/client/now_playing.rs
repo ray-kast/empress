@@ -364,7 +364,7 @@ impl Formatter {
     fn new(format: NowPlayingFormat, watch_zero: Option<bool>) -> Result<Self> {
         Ok(Self {
             ty: match (format.kind, format.string, format.file) {
-                (Some(k), None, None) => match k {
+                (k, None, None) => match k.unwrap_or(FormatKind::Json) {
                     FormatKind::Json => FormatterType::Json,
                     FormatKind::Pretty => FormatterType::Pretty(FORMAT_PRETTY.into()),
                 },
@@ -379,7 +379,7 @@ impl Formatter {
 
                     FormatterType::Pretty(s.into())
                 },
-                (..) => unreachable!(),
+                _ => unreachable!(),
             },
             watch_sep: watch_zero.map(|z| if z { '\0' } else { '\n' }),
             last: None,
