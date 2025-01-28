@@ -143,7 +143,10 @@ fn split_before<'a, O, E>(
     allow_empty: bool,
     mut parser: impl nom::Parser<&'a str, O, E>,
 ) -> impl FnMut(&'a str) -> IResult<&'a str, &'a str> {
-    #[allow(clippy::unnecessary_wraps)]
+    #[expect(
+        clippy::unnecessary_wraps,
+        reason = "This is a domain-specific helper function"
+    )]
     #[inline]
     unsafe fn ok(s: &str, i: usize) -> IResult<&str, &str> {
         Ok((s.get_unchecked(i..), s.get_unchecked(..i)))
@@ -267,13 +270,19 @@ fn escape(s: &str) -> BResult {
 }
 
 fn space(s: &str) -> BResult {
-    let (s, t) = nom::character::complete::space1(s)?;
+    let (s, t) = alt((
+        nom::character::complete::line_ending,
+        nom::character::complete::space1,
+    ))(s)?;
 
     Ok(bit(s, t, |_| Bit::Whitespace))
 }
 
 fn ident(s: &str) -> BResult {
-    #[allow(clippy::unnecessary_wraps)]
+    #[expect(
+        clippy::unnecessary_wraps,
+        reason = "This is a domain-specific helper function"
+    )]
     #[inline]
     unsafe fn ok(s: &str, i: usize) -> BResult {
         Ok(bit(s.get_unchecked(i..), s.get_unchecked(..i), Bit::Ident))

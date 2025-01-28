@@ -7,7 +7,7 @@ mod interp;
 mod lexer;
 
 mod __parser {
-    #![allow(clippy::all, warnings)]
+    #![expect(clippy::all, warnings, reason = "Generated code")]
 
     lalrpop_util::lalrpop_mod!(pub parser, "/format/parser.rs");
 }

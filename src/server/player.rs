@@ -215,7 +215,6 @@ impl Player {
         updated_now!(self)
     }
 
-    #[allow(clippy::cast_possible_truncation)]
     pub async fn set_position(&mut self, id: ObjectPath<'_>, micros: i64) -> Result {
         timeout(&self.inner, |p| p.set_position(id, micros))
             .await
@@ -316,7 +315,11 @@ impl Player {
 
     //////// Empress-specific wrapper methods ////////
 
-    #[allow(clippy::cast_precision_loss, clippy::cast_possible_truncation)]
+    #[expect(
+        clippy::cast_precision_loss,
+        clippy::cast_possible_truncation,
+        reason = "This seems relatively unavoidable here"
+    )]
     async fn offset_position(&mut self, pos: Offset) -> Result<f64> {
         let meta = self.metadata().await?;
 

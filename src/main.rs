@@ -16,6 +16,7 @@
 use std::{
     fmt::{self, Display, Formatter},
     io::IsTerminal,
+    path::PathBuf,
     sync::LazyLock,
 };
 
@@ -80,7 +81,8 @@ struct LogOpts {
     #[arg(long, conflicts_with("quiet"), global = true)]
     no_quiet: bool,
 
-    /// Output extra information to the console
+    /// Output extra information to the console - specify multiple times to
+    /// increase the log level further (maximum is TRACE)
     #[arg(
         short,
         long,
@@ -130,6 +132,48 @@ enum Command {
     Client(ClientCommand),
 }
 
+#[derive(Debug, Clone, Copy, clap::ValueEnum)]
+enum FormatKind {
+    /// Output the raw data formatted as JSON
+    Json,
+    /// Output the data in a human-readable format
+    Pretty,
+}
+
+#[derive(Debug, Clone, clap::Args)]
+struct NowPlayingFormat {
+    /// Instead of outputting in a preset format, specify a format string to be
+    /// evaluated to pretty-print the command output - see the full help for
+    /// this command for a syntax reference
+    #[arg(
+        short = 'f',
+        long = "format",
+        conflicts_with("file"),
+        conflicts_with("kind")
+    )]
+    string: Option<String>,
+
+    /// Specify a path to a file containing a format string, to be evaluated
+    /// in a similar fashion to the -f flag
+    #[arg(
+        short = 'F',
+        long = "format-from",
+        conflicts_with("string"),
+        conflicts_with("kind")
+    )]
+    file: Option<PathBuf>,
+
+    /// Specify the type of the output (e.g. JSON) - cannot be used with
+    /// explicitly-specified format strings
+    #[arg(
+        short = 'o',
+        long = "output",
+        conflicts_with("string"),
+        conflicts_with("file")
+    )]
+    kind: Option<FormatKind>,
+}
+
 #[derive(Debug, Clone, clap::Subcommand)]
 enum ClientCommand {
     /// Scan for any player updates the daemon missed
@@ -142,10 +186,8 @@ enum ClientCommand {
         #[command(flatten)]
         player: PlayerOpts,
 
-        /// Instead of outputting JSON, output a plaintext string with the given
-        /// format - see the full help for this command for a syntax reference
-        #[arg(short, long)]
-        format: Option<String>,
+        #[command(flatten)]
+        format: NowPlayingFormat,
 
         /// Continue watching for changes to playback status and printing
         /// updates

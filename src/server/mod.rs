@@ -27,7 +27,10 @@ mod player_map;
 mod position;
 mod signal_matcher;
 // TODO: rename Server to something like Handler
-#[allow(clippy::module_inception)] // I'm aware, but the struct is called Server
+#[expect(
+    clippy::module_inception,
+    reason = "This is the module for the Server struct"
+)]
 mod server;
 
 pub use position::Position;
