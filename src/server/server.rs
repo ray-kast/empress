@@ -3,7 +3,7 @@ use std::{
     future::Future,
     panic::AssertUnwindSafe,
     sync::{Arc, LazyLock},
-    time::Instant,
+    time::{Duration, Instant},
 };
 
 use anyhow::{anyhow, ensure, Context};
@@ -242,70 +242,89 @@ impl Server {
             chng = owner_changed.next() => chng.map(Event::OwnerChanged),
             _ = stop_rx.recv() => None,
         } {
-            match evt {
-                Event::Message(Ok(m)) => {
-                    let Some(signal) = Self::filter_signal(&m) else {
-                        continue;
-                    };
+            let should_update = 'handle: {
+                match evt {
+                    Event::Message(Ok(m)) => {
+                        let Some(signal) = Self::filter_signal(&m) else {
+                            break 'handle false;
+                        };
 
-                    let res = match signal {
-                        Signal::PropChanged(a) => self.handle_properties_changed(&m, a).await,
-                        Signal::Seeked { micros } => self.handle_seeked(&m, micros).await,
-                    };
+                        let res = match signal {
+                            Signal::PropChanged(a) => self.handle_properties_changed(&m, a).await,
+                            Signal::Seeked { micros } => self.handle_seeked(&m, micros).await,
+                        };
 
-                    match res {
-                        Ok(true) => (),
-                        Ok(false) => continue,
-                        Err(e) => {
-                            warn!(
-                                "Error processing {} signal: {e:?}",
-                                m.header().member().map_or("???", |m| m.as_str())
-                            );
-                            continue;
-                        },
-                    }
-                },
-                Event::Message(Err(e)) => {
-                    warn!("Received a D-Bus error: {:?}", anyhow::Error::from(e));
-                    continue;
-                },
-                Event::OwnerChanged(chng) => {
-                    match self.handle_name_owner_changed(ctx.connection(), chng).await {
-                        Ok(true) => (),
-                        Ok(false) => continue,
-                        Err(e) => {
-                            warn!("Error processing NameOwnerChanged signal: {e:?}");
-                            continue;
-                        },
-                    }
-                },
-            }
+                        match res {
+                            Ok(r) => r,
+                            Err(e) => {
+                                warn!(
+                                    "Error processing {} signal: {e:?}",
+                                    m.header().member().map_or("???", |m| m.as_str())
+                                );
+                                false
+                            },
+                        }
+                    },
+                    Event::Message(Err(e)) => {
+                        warn!("Received a D-Bus error: {:?}", anyhow::Error::from(e));
+                        false
+                    },
+                    Event::OwnerChanged(chng) => {
+                        const TRIES: u32 = 5;
+                        const DELAY_MILLIS: u64 = 5;
 
-            match self.now_playing_invalidate(&ctx).await {
-                Ok(()) => (),
-                Err(e) => {
-                    error!("Error sending change event for NowPlaying: {e}");
-                    break;
-                },
-            }
+                        let mut i = 0;
+                        loop {
+                            match self
+                                .handle_name_owner_changed(ctx.connection(), &chng)
+                                .await
+                            {
+                                Ok(r) => break r,
+                                Err(e) if i == TRIES => {
+                                    warn!("Error processing NameOwnerChanged signal: {e:?}");
+                                    break false;
+                                },
+                                Err(e) => {
+                                    i += 1;
+                                    debug!(
+                                        "Error processing NameOwnerChanged signal (try {i}): {e:?}"
+                                    );
+                                    tokio::time::sleep(Duration::from_millis(DELAY_MILLIS << i))
+                                        .await;
+                                },
+                            }
+                        }
+                    },
+                }
+            };
 
-            debug!("Player list:{}", {
-                let mut s = String::new();
-
-                for player in self.shared.players.read().await.iter_all() {
-                    use std::fmt::Write;
-                    write!(
-                        s,
-                        "\n - {:?} ({:?} at {:?})",
-                        player.bus().as_str(),
-                        player.status(),
-                        player.last_update(),
-                    )
-                    .unwrap();
+            if should_update {
+                match self.now_playing_invalidate(&ctx).await {
+                    Ok(()) => (),
+                    Err(e) => {
+                        error!("Error sending change event for NowPlaying: {e}");
+                        break;
+                    },
                 }
 
-                s
-            });
+                debug!("Player list:{}", {
+                    let mut s = String::new();
+
+                    for player in self.shared.players.read().await.iter_all() {
+                        use std::fmt::Write;
+                        write!(
+                            s,
+                            "\n - {:?} ({:?} at {:?})",
+                            player.bus().as_str(),
+                            player.status(),
+                            player.last_update(),
+                        )
+                        .unwrap();
+                    }
+
+                    s
+                });
+            }
         }
     }
 
@@ -431,7 +450,7 @@ impl Server {
     async fn handle_name_owner_changed(
         &self,
         conn: &Connection,
-        chng: fdo::NameOwnerChanged,
+        chng: &fdo::NameOwnerChanged,
     ) -> Result<bool> {
         let args = chng
             .args()
