@@ -24,9 +24,13 @@ use crate::{Result, SERVER_NAME, SERVER_PATH};
 pub mod mpris;
 mod player;
 mod player_map;
+mod position;
+mod signal_matcher;
 // TODO: rename Server to something like Handler
 #[allow(clippy::module_inception)] // I'm aware, but the struct is called Server
 mod server;
+
+pub use position::Position;
 
 #[derive(
     Debug,
@@ -111,6 +115,7 @@ pub struct PlayerStatus {
     pub bus: String,
     pub ident: String,
     pub status: PlaybackStatus,
+    pub rate: f64,
     pub position: i64,
     pub metadata: HashMap<String, OwnedValue>,
 }

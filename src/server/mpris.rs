@@ -6,9 +6,12 @@ use zbus::{
     zvariant::{ObjectPath, OwnedObjectPath, OwnedValue},
 };
 
-const NAME_PREFIX: &str = "org.mpris.MediaPlayer2";
+pub const NAME_PREFIX: &str = "org.mpris.MediaPlayer2";
+const PATH_PREFIX: &str = "/org/mpris/MediaPlayer2";
 
 pub static BUS_NAME: LazyLock<OwnedBusName> = LazyLock::new(|| NAME_PREFIX.try_into().unwrap());
+pub static OBJECT_PATH: LazyLock<OwnedObjectPath> =
+    LazyLock::new(|| PATH_PREFIX.try_into().unwrap());
 pub static INTERFACE: LazyLock<OwnedInterfaceName> =
     LazyLock::new(|| NAME_PREFIX.try_into().unwrap());
 
@@ -38,15 +41,20 @@ pub trait Player {
     fn play(&self) -> fdo::Result<()>;
     fn set_position(&self, track: ObjectPath<'_>, pos: i64) -> fdo::Result<()>;
 
+    #[zbus(signal)]
+    fn seeked(&self, pos: i64) -> fdo::Result<()>;
+
     #[zbus(property)]
     fn playback_status(&self) -> fdo::Result<player::PlaybackStatus>;
+    #[zbus(property)]
+    fn rate(&self) -> fdo::Result<f64>;
     #[zbus(property)]
     fn metadata(&self) -> fdo::Result<HashMap<String, OwnedValue>>;
     #[zbus(property)]
     fn volume(&self) -> fdo::Result<f64>;
     #[zbus(property)]
     fn set_volume(&self, vol: f64) -> fdo::Result<()>;
-    #[zbus(property)]
+    #[zbus(property(emits_changed_signal = "false"))]
     fn position(&self) -> fdo::Result<i64>;
     #[zbus(property)]
     fn can_go_next(&self) -> fdo::Result<bool>;
@@ -115,24 +123,18 @@ pub mod player {
         }
     }
 
-    impl<'a> From<PlaybackStatus> for zvariant::Value<'a> {
-        fn from(value: PlaybackStatus) -> Self {
-            value.to_string().into()
-        }
+    impl From<PlaybackStatus> for zvariant::Value<'_> {
+        fn from(value: PlaybackStatus) -> Self { value.to_string().into() }
     }
 
     impl From<PlaybackStatus> for String {
-        fn from(s: PlaybackStatus) -> Self {
-            s.to_string()
-        }
+        fn from(s: PlaybackStatus) -> Self { s.to_string() }
     }
 
     impl TryFrom<String> for PlaybackStatus {
         type Error = <Self as std::str::FromStr>::Err;
 
-        fn try_from(value: String) -> Result<Self, Self::Error> {
-            value.parse()
-        }
+        fn try_from(value: String) -> Result<Self, Self::Error> { value.parse() }
     }
 
     impl TryFrom<OwnedValue> for PlaybackStatus {
@@ -150,56 +152,56 @@ pub mod player {
 pub mod track_list {
     use std::sync::LazyLock;
 
-    use super::OwnedObjectPath;
+    use super::{OwnedObjectPath, PATH_PREFIX};
 
-    /// Type: ObjectPath
+    /// Type: `ObjectPath`
     pub const ATTR_TRACK_ID: &str = "mpris:trackid";
-    /// Type: i64
+    /// Type: `i64`
     pub const ATTR_LENGTH: &str = "mpris:length";
-    /// Type: Url
+    /// Type: `Url`
     pub const ATTR_ART_URL: &str = "mpris:artUrl";
 
-    /// Type: String
+    /// Type: `String`
     pub const ATTR_ALBUM: &str = "xesam:album";
-    /// Type: Vec<String>
+    /// Type: `Vec<String>`
     pub const ATTR_ALBUM_ARTISTS: &str = "xesam:albumArtist";
-    /// Type: Vec<String>
+    /// Type: `Vec<String>`
     pub const ATTR_ARTISTS: &str = "xesam:artist";
-    /// Type: String
+    /// Type: `String`
     pub const ATTR_LYRICS: &str = "xesam:asText";
-    /// Type: {integer}
+    /// Type: `{integer}`
     pub const ATTR_BPM: &str = "xesam:audioBPM";
-    /// Type: f64 in [0.0, 1.0]
+    /// Type: `f64` in [0.0, 1.0]
     pub const ATTR_AUTO_RATING: &str = "xesam:autoRating";
-    /// Type: Vec<String>
+    /// Type: `Vec<String>`
     pub const ATTR_COMMENTS: &str = "xesam:comment";
-    /// Type: Vec<String>
+    /// Type: `Vec<String>`
     pub const ATTR_COMPOSERS: &str = "xesam:composer";
-    /// Type: DateTime
+    /// Type: `DateTime`
     pub const ATTR_DATE_CREATED: &str = "xesam:contentCreated";
-    /// Type: {integer}
+    /// Type: `{integer}`
     pub const ATTR_DISC_NUM: &str = "xesam:discNumber";
-    /// Type: DateTime
+    /// Type: `DateTime`
     pub const ATTR_DATE_FIRST_PLAYED: &str = "xesam:firstUsed";
-    /// Type: Vec<String>
+    /// Type: `Vec<String>`
     pub const ATTR_GENRES: &str = "xesam:genre";
-    /// Type: DateTime
+    /// Type: `DateTime`
     pub const ATTR_DATE_LAST_PLAYED: &str = "xesam:lastUsed";
-    /// Type: Vec<String>
+    /// Type: `Vec<String>`
     pub const ATTR_LYRICISTS: &str = "xesam:lyricist";
-    /// Type: String
+    /// Type: `String`
     pub const ATTR_TITLE: &str = "xesam:title";
-    /// Type: {integer}
+    /// Type: `{integer}`
     pub const ATTR_TRACK_NUM: &str = "xesam:trackNumber";
-    /// Type: Url
+    /// Type: `Url`
     pub const ATTR_URL: &str = "xesam:url";
-    /// Type: {integer}
+    /// Type: `{integer}`
     pub const ATTR_PLAY_COUNT: &str = "xesam:useCount";
-    /// Type: f64 in [0.0, 1.0]
+    /// Type: `f64` in [0.0, 1.0]
     pub const ATTR_USER_RATING: &str = "xesam:userRating";
 
     pub static NO_TRACK: LazyLock<OwnedObjectPath> = LazyLock::new(|| {
-        "/org/mpris/MediaPlayer2/TrackList/NoTrack"
+        format!("{PATH_PREFIX}/TrackList/NoTrack")
             .try_into()
             .unwrap()
     });

@@ -28,7 +28,7 @@ pub enum Error {
     Interpret(#[from] interp::Error),
 }
 
-impl<'a> From<NomError<&'a str>> for Error {
+impl From<NomError<&str>> for Error {
     fn from(NomError { input, code }: NomError<&str>) -> Self {
         Self::Lex(NomError {
             input: input.into(),
@@ -37,7 +37,7 @@ impl<'a> From<NomError<&'a str>> for Error {
     }
 }
 
-impl<'a> From<ParseError<lexer::Token<'a>>> for Error {
+impl From<ParseError<lexer::Token<'_>>> for Error {
     fn from(e: ParseError<lexer::Token>) -> Self { Self::Parse(e.map_token(|t| format!("{t:?}"))) }
 }
 

@@ -14,7 +14,7 @@ pub enum Segment<'a> {
     Block(Option<Expr<'a>>),
 }
 
-impl<'a, 's> Stream<'a> for Segment<'s> {
+impl<'a> Stream<'a> for Segment<'_> {
     type Context = &'a Context;
     type Error = Error;
 
@@ -49,7 +49,7 @@ pub enum NullChain<'a> {
     Bang(NullPipeline<'a>),
 }
 
-impl<'a, 's> Eval<'a> for NullChain<'s> {
+impl<'a> Eval<'a> for NullChain<'_> {
     type Output = CowValue<'a>;
 
     fn eval(self, ctx: &'a Context, topic: Option<CowValue<'a>>) -> Result<CowValue<'a>> {
@@ -70,7 +70,7 @@ pub enum NullPipeline<'a> {
     Pipe(Pipeline<'a>),
 }
 
-impl<'a, 's> Eval<'a> for NullPipeline<'s> {
+impl<'a> Eval<'a> for NullPipeline<'_> {
     type Output = CowValue<'a>;
 
     fn eval(self, ctx: &'a Context, topic: Option<CowValue<'a>>) -> Result<CowValue<'a>> {
@@ -90,7 +90,7 @@ pub enum Pipeline<'a> {
     Member(Member<'a>),
 }
 
-impl<'a, 's> Eval<'a> for Pipeline<'s> {
+impl<'a> Eval<'a> for Pipeline<'_> {
     type Output = CowValue<'a>;
 
     fn eval(self, ctx: &'a Context, topic: Option<CowValue<'a>>) -> Result<CowValue<'a>> {
@@ -118,16 +118,12 @@ fn lens_index<'a, R: Eval<'a, Output = CowValue<'a>>>(
     lhs: CowValue<'a>,
     rhs: R,
 ) -> Result<CowValue<'a>> {
-    fn as_usize(i: &Value) -> Option<usize> {
-        i.as_u64().and_then(|i| i.try_into().ok())
-    }
+    fn as_usize(i: &Value) -> Option<usize> { i.as_u64().and_then(|i| i.try_into().ok()) }
 
-    fn array_has_idx(a: &[Value], i: &Value) -> bool {
-        as_usize(i).map_or(false, |i| a.len() > i)
-    }
+    fn array_has_idx(a: &[Value], i: &Value) -> bool { as_usize(i).is_some_and(|i| a.len() > i) }
 
     fn object_has_idx(m: &serde_json::Map<String, Value>, i: &Value) -> bool {
-        i.as_str().map_or(false, |i| m.contains_key(i))
+        i.as_str().is_some_and(|i| m.contains_key(i))
     }
 
     match (lhs, rhs.eval(ctx, None)?) {
@@ -158,7 +154,7 @@ pub enum Member<'a> {
     Prim(Prim<'a>),
 }
 
-impl<'a, 's> Eval<'a> for Member<'s> {
+impl<'a> Eval<'a> for Member<'_> {
     type Output = CowValue<'a>;
 
     fn eval(self, ctx: &'a Context, topic: Option<CowValue<'a>>) -> Result<CowValue<'a>> {
@@ -181,7 +177,7 @@ pub enum Prim<'a> {
     Value(Value),
 }
 
-impl<'a, 's> Eval<'a> for Prim<'s> {
+impl<'a> Eval<'a> for Prim<'_> {
     type Output = CowValue<'a>;
 
     fn eval(self, ctx: &'a Context, topic: Option<CowValue<'a>>) -> Result<CowValue<'a>> {
@@ -238,7 +234,7 @@ pub enum Args<'a> {
     Arg(Arg<'a>),
 }
 
-impl<'a, 's> Eval<'a> for Args<'s> {
+impl<'a> Eval<'a> for Args<'_> {
     type Output = Option<Vec<CowValue<'a>>>;
 
     fn eval(
@@ -268,7 +264,7 @@ pub enum Arg<'a> {
     Expr(Expr<'a>),
 }
 
-impl<'a, 's> Eval<'a> for Arg<'s> {
+impl<'a> Eval<'a> for Arg<'_> {
     type Output = Option<CowValue<'a>>;
 
     fn eval(self, ctx: &'a Context, topic: Option<CowValue<'a>>) -> Result<Option<CowValue<'a>>> {

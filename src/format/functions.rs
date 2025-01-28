@@ -37,15 +37,15 @@ pub fn all() -> Functions {
 
 //////// Helper functions
 
-fn hmss_usec(mut us: i64, neg_zero: bool) -> String {
+fn hmss_micros(mut micros: i64, neg_zero: bool) -> String {
     let mut s = String::new();
 
-    if us < 0 || us == 0 && neg_zero {
+    if micros < 0 || micros == 0 && neg_zero {
         s.push('-');
-        us = -us;
+        micros = -micros;
     }
 
-    let mut sec = us / 1_000_000;
+    let mut sec = micros / 1_000_000;
     let mut min = sec / 60;
     sec %= 60;
     let hr = min / 60;
@@ -112,7 +112,7 @@ fn compact(inp: Input) -> Output {
 fn eta(inp: Input) -> Output {
     let (_ctx, Topic(Number::<i64>(len)), (Number::<i64>(duration), ())) = inp.try_into()?;
 
-    Ok(Owned(Value::String(hmss_usec(len - duration, true))))
+    Ok(Owned(Value::String(hmss_micros(len - duration, true))))
 }
 
 fn join(inp: Input) -> Output {
@@ -220,7 +220,7 @@ fn sym(inp: Input) -> Output {
 fn time(inp: Input) -> Output {
     let (_ctx, Topic(Number::<i64>(len)), ()) = inp.try_into()?;
 
-    Ok(Owned(Value::String(hmss_usec(len, false))))
+    Ok(Owned(Value::String(hmss_micros(len, false))))
 }
 
 fn trim(inp: Input) -> Output { stream_str(inp, |s| s.trim().to_owned()) }

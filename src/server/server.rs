@@ -16,7 +16,7 @@ use tokio::{
 };
 use zbus::{
     fdo::{self, DBusProxy},
-    names::{BusName, OwnedInterfaceName, UniqueName, WellKnownName},
+    names::{BusName, InterfaceName, MemberName, OwnedInterfaceName, UniqueName, WellKnownName},
     object_server::SignalEmitter,
     zvariant::{ObjectPath, OwnedValue, Value},
     Connection, MatchRule, Message,
@@ -26,37 +26,13 @@ use super::{
     method_err,
     mpris::{self, player::PlaybackStatus},
     player::{self, Action},
-    player_map::PlayerChange,
+    player_map::{PlayerChange, PlayerMut},
     Player, PlayerList, PlayerMap, PlayerOpts, PlayerStatus, PlayerStatusKind, ZResult,
 };
-use crate::{server::PlayerMatcher, Offset, Result};
-
-struct SignalMatcher<'a> {
-    dbus: DBusProxy<'a>,
-    match_rule: Option<MatchRule<'static>>,
-}
-
-impl<'a> SignalMatcher<'a> {
-    pub async fn shutdown(&mut self) -> Result {
-        self.dbus
-            .remove_match_rule(
-                self.match_rule.take().ok_or_else(|| {
-                    anyhow!("shutdown() called on already-closed signal matcher!")
-                })?,
-            )
-            .await
-            .context("Error removing signal match rule")
-    }
-}
-
-impl<'a> Drop for SignalMatcher<'a> {
-    fn drop(&mut self) {
-        // TODO: async drop wen eta son
-        if self.match_rule.is_some() {
-            warn!("Signal matcher dropped without calling .shutdown()!");
-        }
-    }
-}
+use crate::{
+    server::{signal_matcher::SignalMatcher, PlayerMatcher},
+    Offset, Result,
+};
 
 #[derive(Clone, Copy)]
 enum PropInterface {
@@ -64,6 +40,17 @@ enum PropInterface {
     Base,
     /// org.mpris.MediaPlayer2.Player
     Player,
+}
+
+enum Signal {
+    Seeked { micros: i64 },
+    PropChanged(PropertyChangedArgs),
+}
+
+struct PropertyChangedArgs {
+    iface: PropInterface,
+    changed: HashMap<String, OwnedValue>,
+    invalidated: Vec<String>,
 }
 
 // TODO: miserable AsyncFn workaround
@@ -128,9 +115,7 @@ impl Server {
         }
     }
 
-    fn filter_prop_changed(
-        msg: &Message,
-    ) -> Option<(PropInterface, HashMap<String, OwnedValue>, Vec<String>)> {
+    fn filter_signal(msg: &Message) -> Option<Signal> {
         static IFACE_MAP: LazyLock<HashMap<&'static OwnedInterfaceName, PropInterface>> =
             LazyLock::new(|| {
                 [
@@ -141,30 +126,45 @@ impl Server {
                 .collect()
             });
 
+        const PLAYER_IFACE: &str = "org.mpris.MediaPlayer2.Player";
+        debug_assert_eq!(PLAYER_IFACE, mpris::player::INTERFACE.as_str());
+
         let hdr = msg.header();
         let iface = hdr.interface();
         let memb = hdr.member();
 
-        if iface.map_or(true, |i| i != "org.freedesktop.DBus.Properties")
-            || memb.map_or(true, |m| m != "PropertiesChanged")
-        {
-            return None;
+        match (
+            iface.map(InterfaceName::as_str),
+            memb.map(MemberName::as_str),
+        ) {
+            (Some("org.freedesktop.DBus.Properties"), Some("PropertiesChanged")) => {
+                let (iface, changed, invalidated) = msg
+                    .body()
+                    .deserialize::<(OwnedInterfaceName, HashMap<String, OwnedValue>, Vec<String>)>()
+                    .map_err(|e| {
+                        debug!("Error deserializing possible PropertiesChanged event: {e}");
+                    })
+                    .ok()?;
+
+                Some(Signal::PropChanged(PropertyChangedArgs {
+                    iface: *IFACE_MAP.get(&iface)?,
+                    changed,
+                    invalidated,
+                }))
+            },
+            (Some(PLAYER_IFACE), Some("Seeked")) => {
+                let (micros,) = msg
+                    .body()
+                    .deserialize::<(i64,)>()
+                    .map_err(|e| {
+                        debug!("Error deserializing possible PropertiesChanged event: {e}");
+                    })
+                    .ok()?;
+
+                Some(Signal::Seeked { micros })
+            },
+            _ => None,
         }
-
-        let (iface, changed, invalidated) =
-            match msg
-                .body()
-                .deserialize::<(OwnedInterfaceName, HashMap<String, OwnedValue>, Vec<String>)>()
-            {
-                Ok(b) => b,
-                Err(e) => {
-                    debug!("Error deserializing possible PropertiesChanged event: {e}");
-
-                    return None;
-                },
-            };
-
-        Some((*IFACE_MAP.get(&iface)?, changed, invalidated))
     }
 
     async fn spawn_background_scanner(
@@ -172,23 +172,29 @@ impl Server {
         ctx: SignalEmitter<'static>,
         stop_rx: mpsc::Receiver<()>,
     ) -> Result<JoinHandle<()>> {
-        // TODO: can this be narrowed down further?
-        let mr = MatchRule::builder()
-            .msg_type(zbus::message::Type::Signal)
-            .interface("org.freedesktop.DBus.Properties")
-            .unwrap()
-            .member("PropertiesChanged")
-            .unwrap()
-            .build();
-        self.dbus
-            .add_match_rule(mr.clone())
-            .await
-            .context("Error adding message match rule")?;
+        let mut matcher = SignalMatcher::new(self.dbus.clone(), [
+            MatchRule::builder()
+                .msg_type(zbus::message::Type::Signal)
+                .interface("org.freedesktop.DBus.Properties")
+                .unwrap()
+                .member("PropertiesChanged")
+                .unwrap()
+                .path(&*mpris::OBJECT_PATH)
+                .unwrap()
+                .build(),
+            MatchRule::builder()
+                .msg_type(zbus::message::Type::Signal)
+                .interface(&*mpris::player::INTERFACE)
+                .unwrap()
+                .member("Seeked")
+                .unwrap()
+                .path(&*mpris::OBJECT_PATH)
+                .unwrap()
+                .build(),
+        ])
+        .await
+        .context("Error registering background scan matchers")?;
 
-        let mut matcher = SignalMatcher {
-            dbus: self.dbus.clone(),
-            match_rule: Some(mr),
-        };
         let msgs = zbus::MessageStream::from(ctx.connection().clone());
 
         let owner_changed = self
@@ -206,7 +212,7 @@ impl Server {
             matcher
                 .shutdown()
                 .await
-                .map_err(|e| warn!("Error unregistering background scan matcher: {e:?}"))
+                .map_err(|e| warn!("Error unregistering background scan matchers: {e:?}"))
                 .ok();
 
             dispose::abort_on_panic(|| res.unwrap());
@@ -238,17 +244,25 @@ impl Server {
         } {
             match evt {
                 Event::Message(Ok(m)) => {
-                    if let Some(evt) = Self::filter_prop_changed(&m) {
-                        match self.handle_property_changed(&m, evt).await {
-                            Ok(true) => (),
-                            Ok(false) => continue,
-                            Err(e) => {
-                                warn!("Error processing PropertyChanged signal: {e:?}");
-                                continue;
-                            },
-                        }
-                    } else {
+                    let Some(signal) = Self::filter_signal(&m) else {
                         continue;
+                    };
+
+                    let res = match signal {
+                        Signal::PropChanged(a) => self.handle_properties_changed(&m, a).await,
+                        Signal::Seeked { micros } => self.handle_seeked(&m, micros).await,
+                    };
+
+                    match res {
+                        Ok(true) => (),
+                        Ok(false) => continue,
+                        Err(e) => {
+                            warn!(
+                                "Error processing {} signal: {e:?}",
+                                m.header().member().map_or("???", |m| m.as_str())
+                            );
+                            continue;
+                        },
                     }
                 },
                 Event::Message(Err(e)) => {
@@ -295,64 +309,49 @@ impl Server {
         }
     }
 
-    // Returns true if the player list needs updating
-    #[inline]
-    async fn handle_property_changed(
-        &self,
-        msg: &Message,
-        (iface, changed, invalidated): (PropInterface, HashMap<String, OwnedValue>, Vec<String>),
-    ) -> Result<bool> {
+    async fn resolve_signal_sender(&self, msg: &Message) -> Result<WellKnownName<'static>> {
         let header = msg.header();
-
         let sender = header.sender().context("Message had no sender")?;
 
         let players = self.shared.players.read().await;
-
         let sender = players
             .resolve(&sender.to_owned())
             .with_context(|| format!("Unexpected bus name {sender:?}"))?
             .to_owned();
 
-        drop(players);
+        Ok(sender)
+    }
 
+    // Returns true if the player list needs updating
+    #[inline]
+    async fn handle_properties_changed(
+        &self,
+        msg: &Message,
+        args: PropertyChangedArgs,
+    ) -> Result<bool> {
+        let PropertyChangedArgs {
+            iface,
+            changed,
+            invalidated,
+        } = args;
+
+        let sender = self.resolve_signal_sender(msg).await?;
         let mut ret = false;
+
+        let mut players = self.shared.players.write().await;
+        let Some(mut player) = players.get_mut(&sender) else {
+            return Ok(false);
+        };
 
         if !changed.is_empty() {
             trace!("properties on {sender:?} changed: {changed:?}");
 
             for (name, val) in changed {
-                // TODO: find a more elegant way to do this
-                #[allow(clippy::single_match)]
-                match (iface, &*name) {
-                    (PropInterface::Base, "Identity")
-                    | (PropInterface::Player, "Metadata" | "Position") => ret = true,
-                    (PropInterface::Player, "PlaybackStatus") => {
-                        let mut players = self.shared.players.write().await;
-
-                        if let Some((mut player, val)) = async {
-                            let player = players.get_mut(&sender)?;
-
-                            let val: PlaybackStatus = val
-                                .downcast_ref::<&str>()
-                                .context("Error downcasting playback status")
-                                .and_then(|s| s.parse().context("Error parsing playback status"))
-                                .with_context(|| {
-                                    format!(
-                                        "Error handling property change of {name:?} for {sender:?}"
-                                    )
-                                })
-                                .map_err(|e| warn!("{e:?}"))
-                                .ok()?;
-
-                            Some((player, val))
-                        }
-                        .await
-                        {
-                            player.update_status(val);
-                            ret = true;
-                        };
+                match Self::handle_property_changed(&mut player, iface, &name, Some(val)) {
+                    Ok(r) => ret |= r,
+                    Err(e) => {
+                        warn!("Error handling property change of {name:?} for {sender:?}: {e:?}");
                     },
-                    _ => (),
                 }
             }
         }
@@ -361,44 +360,70 @@ impl Server {
             trace!("properties on {sender:?} invalidated: {invalidated:?}");
 
             for name in invalidated {
-                // TODO: find a more elegant way to do this
-                #[allow(clippy::single_match)]
-                match (iface, &*name) {
-                    (PropInterface::Base, "Identity")
-                    | (PropInterface::Player, "Metadata" | "Position") => ret = true,
-                    (PropInterface::Base, "PlaybackStatus") => {
-                        let mut players = self.shared.players.write().await;
-
-                        if let Some((mut player, status)) = async {
-                            let player = players.get_mut(&sender)?;
-
-                            let status = player
-                                .playback_status()
-                                .await
-                                .context("Error getting player status")
-                                .with_context(|| {
-                                    format!(
-                                        "Error handling property invalidaton of {name:?} for \
-                                         {sender:?}"
-                                    )
-                                })
-                                .map_err(|e| warn!("{e:?}"))
-                                .ok()?;
-
-                            Some((player, status))
-                        }
-                        .await
-                        {
-                            player.update_status(status);
-                            ret = true;
-                        };
+                match Self::handle_property_changed(&mut player, iface, &name, None) {
+                    Ok(r) => ret |= r,
+                    Err(e) => {
+                        warn!(
+                            "Error handling property invalidation of {name:?} for {sender:?}: \
+                             {e:?}"
+                        );
                     },
-                    _ => (),
                 }
             }
         }
 
         Ok(ret)
+    }
+
+    // Returns true if the player list needs updating
+    fn handle_property_changed(
+        player: &mut PlayerMut<'_>,
+        iface: PropInterface,
+        name: &str,
+        val: Option<OwnedValue>,
+    ) -> Result<bool> {
+        match (iface, name, val) {
+            (PropInterface::Base, "Identity", _) | (PropInterface::Player, "Metadata", _) => {
+                Ok(true)
+            },
+            (PropInterface::Player, "Rate", Some(val)) => {
+                player.update_rate(
+                    val.downcast_ref::<f64>()
+                        .context("Error downcasting playback rate")?,
+                );
+
+                Ok(false)
+            },
+            (PropInterface::Player, "PlaybackStatus", Some(val)) => {
+                let val: PlaybackStatus = val
+                    .downcast_ref::<&str>()
+                    .context("Error downcasting playback status")?
+                    .parse()
+                    .context("Error parsing playback status")?;
+
+                Ok(player.update_status(val).is_some())
+            },
+            _ => Ok(false),
+        }
+    }
+
+    // Returns true if the player list needs updating
+    async fn handle_seeked(&self, msg: &Message, micros: i64) -> Result<bool> {
+        let sender = self.resolve_signal_sender(msg).await?;
+
+        trace!("position on {sender:?} changed: {micros:?}");
+
+        let mut players = self.shared.players.write().await;
+        let Some(player) = players.get_mut(&sender) else {
+            return Ok(false);
+        };
+
+        player
+            .force_update_position(Some(micros))
+            .await
+            .context("Error updating player position")?;
+
+        Ok(true)
     }
 
     // Returns true if the player list needs updating
@@ -582,7 +607,7 @@ impl Server {
 
                 let has_track = metadata
                     .get(mpris::track_list::ATTR_TRACK_ID)
-                    .map_or(false, |v| match **v {
+                    .is_some_and(|v| match **v {
                         Value::ObjectPath(ref p) => *p != mpris::track_list::NO_TRACK.as_ref(),
                         _ => false,
                     });
@@ -594,11 +619,16 @@ impl Server {
                     .map_or_else(String::new, Into::into);
                 let ident = player.identity().await?;
                 let status = player.status();
-                let position = if has_track {
-                    player.position().await.ok()
+                let (rate, position) = if has_track {
+                    player
+                        .position()
+                        .await
+                        .ok()
+                        .map(|p| (p.rate(), p.get(None)))
                 } else {
                     None
-                };
+                }
+                .unzip();
 
                 Ok(Some(PlayerStatus {
                     kind: if position.is_some() {
@@ -609,6 +639,7 @@ impl Server {
                     bus,
                     ident,
                     status,
+                    rate: rate.unwrap_or(0.0),
                     position: position.unwrap_or(0),
                     metadata,
                 }))

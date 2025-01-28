@@ -1,4 +1,8 @@
-use std::{future::Future, io, io::IsTerminal, time::Duration};
+use std::{
+    future::Future,
+    io::{self, IsTerminal},
+    time::Duration,
+};
 
 use anyhow::{Context, Error};
 use futures_util::StreamExt;
@@ -7,6 +11,7 @@ use log::{info, trace, warn};
 use serde::Serialize;
 use zbus::{
     connection,
+    proxy::PropertyChanged,
     zvariant::{ObjectPath, OwnedValue},
 };
 
@@ -14,7 +19,9 @@ use self::proxy::EmpressProxy;
 use crate::{
     format,
     server::{
-        self, mpris, mpris::player::PlaybackStatus, MatchPlayer, PlayerStatus, PlayerStatusKind,
+        self,
+        mpris::{self, player::PlaybackStatus},
+        MatchPlayer, PlayerStatus, PlayerStatusKind, Position,
     },
     timeout::Timeout,
     ClientCommand, Offset, PlayerOpts, Result, SERVER_NAME,
@@ -34,6 +41,7 @@ struct NowPlayingPlayer {
 struct NowPlayingResult {
     status: PlaybackStatus,
     player: NowPlayingPlayer,
+    rate: f64,
     position: Option<i64>,
 
     track_id: Option<String>,
@@ -59,6 +67,13 @@ struct NowPlayingResult {
     url: Option<String>,
     play_count: Option<i64>,
     user_rating: Option<f64>,
+}
+
+impl NowPlayingResult {
+    fn capture_position(&self) -> Option<Position> {
+        self.position
+            .map(|p| Position::capture(p, self.status == PlaybackStatus::Playing, self.rate))
+    }
 }
 
 macro_rules! extract {
@@ -125,6 +140,7 @@ impl TryFrom<PlayerStatus> for NowPlayingResult {
             bus,
             ident,
             status,
+            rate,
             position,
             mut metadata,
         } = status;
@@ -166,6 +182,7 @@ impl TryFrom<PlayerStatus> for NowPlayingResult {
         Ok(Self {
             status,
             player: NowPlayingPlayer { bus, id },
+            rate,
             position,
             track_id,
             length,
@@ -340,62 +357,152 @@ async fn now_playing(
     })
     .await?;
 
+    trace!("Full now-playing response: {status:?}");
+    let status = status.try_into()?;
     let format = format.as_deref();
-    let mut last = print_now_playing(status, format, |_| true)?.1;
+    let last = print_now_playing(&status, format, None, || ())?;
 
     if watch {
         println!();
 
-        let player = player.build().context("Invalid player filter options")?;
-        let mut stream = proxy
-            .run(
-                Duration::from_secs(1),
-                EmpressProxy::receive_now_playing_changed,
-            )
-            .await
-            .context("Error getting now-playing status")?;
-
-        while let Some(s) = stream.next().await {
-            let val = s.get().await.context("Error parsing property value")?;
-
-            trace!("Full now-playing response: {val:?}");
-
-            let (skip, val) = print_now_playing(val, format, |v| *v != last && player.is_match(v))?;
-            if skip {
-                continue;
-            }
-
-            println!();
-
-            last = val;
-        }
+        watch_now_playing(proxy, player, format, status, last).await
     } else {
         courtesy_line!();
-    }
 
-    Ok(())
+        Ok(())
+    }
 }
 
-fn print_now_playing(
-    resp: PlayerStatus,
+async fn watch_now_playing(
+    proxy: Timeout<EmpressProxy<'_>>,
+    player: server::PlayerOpts,
     format: Option<&str>,
-    f: impl FnOnce(&NowPlayingResult) -> bool,
-) -> Result<(bool, NowPlayingResult)> {
-    trace!("Full now-playing response: {resp:?}");
-
-    let resp: NowPlayingResult = resp.try_into()?;
-
-    if !f(&resp) {
-        return Ok((true, resp));
+    mut status: NowPlayingResult,
+    mut last: Option<String>,
+) -> Result<()> {
+    enum Event<'a> {
+        TickSec,
+        TickThrottled,
+        Update(Option<PropertyChanged<'a, PlayerStatus>>),
+        Stop(Result<(), io::Error>),
     }
 
+    const MICROS_PER_SEC: i64 = 1_000_000;
+    const THROTTLE_MILLIS: u32 = 60;
+
+    async fn tick(status: &NowPlayingResult) -> Option<Event<'static>> {
+        if status.status != PlaybackStatus::Playing {
+            return None;
+        }
+
+        let rem_micros = 1_000_000 - status.position? % MICROS_PER_SEC;
+
+        #[expect(
+            clippy::cast_precision_loss,
+            reason = "Precision loss should not be an issue since rem_micros is [0, 1e6)"
+        )]
+        let mut sleep_millis = rem_micros as f64 / (status.rate * 1e3).min(1e7);
+        // I'm sure there's a way to make this branchless without worrying
+        // about whether the compiler will do it, but NaN scares me so it's in
+        // no way worth it
+        if !sleep_millis.is_finite() {
+            sleep_millis = 0.0;
+        }
+        #[expect(
+            clippy::cast_possible_truncation,
+            clippy::cast_sign_loss,
+            reason = "Casting the ceiling of sleep_millis to u64 should not lose any critical \
+                      information"
+        )]
+        let sleep_millis = sleep_millis.ceil() as u64;
+
+        if sleep_millis > THROTTLE_MILLIS.into() {
+            tokio::time::sleep(Duration::from_millis(sleep_millis)).await;
+            Some(Event::TickSec)
+        } else {
+            tokio::time::sleep(Duration::from_millis(THROTTLE_MILLIS.into())).await;
+            Some(Event::TickThrottled)
+        }
+    }
+
+    let mut position = status.capture_position();
+
+    let player = player.build().context("Invalid player filter options")?;
+    let mut stream = proxy
+        .run(
+            Duration::from_secs(1),
+            EmpressProxy::receive_now_playing_changed,
+        )
+        .await
+        .context("Error getting now-playing status")?;
+
+    loop {
+        let event = tokio::select! {
+            Some(e) = tick(&status) => e,
+            s = stream.next() => Event::Update(s),
+            r = tokio::signal::ctrl_c() => Event::Stop(r),
+        };
+
+        match event {
+            Event::TickSec => {
+                if let Some(pos) = position {
+                    let last = status.position;
+                    let curr = pos.get(None);
+                    let curr_rem = curr % MICROS_PER_SEC;
+                    // Make sure the seconds
+                    status.position = Some(
+                        if last.is_some_and(|l| l - l % MICROS_PER_SEC == curr - curr_rem) {
+                            curr + MICROS_PER_SEC - curr_rem
+                        } else {
+                            curr
+                        },
+                    );
+                }
+            },
+            Event::TickThrottled => status.position = position.map(|p| p.get(None)),
+            Event::Update(Some(s)) => {
+                let next: NowPlayingResult = s
+                    .get()
+                    .await
+                    .context("Error parsing property value")?
+                    .try_into()?;
+
+                if next == status || !player.is_match(&next) {
+                    continue;
+                }
+
+                trace!("Full now-playing response: {status:?}");
+                status = next;
+                position = status.capture_position();
+            },
+            Event::Update(None) => anyhow::bail!("Empress server hung up"),
+            Event::Stop(r) => break r.context("Error catching ^C"),
+        }
+
+        last = print_now_playing(&status, format, last, || println!())?;
+    }
+}
+
+#[inline]
+fn print_now_playing(
+    status: &NowPlayingResult,
+    format: Option<&str>,
+    last: Option<String>,
+    post_print: impl FnOnce(),
+) -> Result<Option<String>> {
     if let Some(format) = format {
-        print!("{}", format::eval(format, &resp)?);
-    } else {
-        serde_json::to_writer(io::stdout(), &resp)?;
-    }
+        let s = format::eval(format, status)?;
 
-    Ok((false, resp))
+        if last.is_none_or(|l| l != s) {
+            print!("{s}");
+            post_print();
+        }
+
+        Ok(Some(s))
+    } else {
+        serde_json::to_writer(io::stdout(), status)?;
+        Ok(None)
+    }
 }
 
 async fn try_send<

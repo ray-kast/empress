@@ -11,6 +11,10 @@ pub(super) fn json(value: &Value) -> String {
     serde_json::to_string(&value).unwrap_or_else(|_| "<error>".into())
 }
 
+#[expect(
+    clippy::ref_option,
+    reason = "This is a domain-specific helper function"
+)]
 pub(super) fn assert_no_topic<D: Debug>(topic: &Option<CowValue>, d: &D) -> Result<()> {
     match topic {
         Some(_) => Err(Error::ExtraTopic(format!("{d:?}"))),
@@ -18,6 +22,10 @@ pub(super) fn assert_no_topic<D: Debug>(topic: &Option<CowValue>, d: &D) -> Resu
     }
 }
 
+#[expect(
+    clippy::ref_option,
+    reason = "This is a domain-specific helper function"
+)]
 pub(super) fn assert_topic<D: Debug>(topic: &Option<CowValue<'_>>, d: &D) -> Result<()> {
     match topic {
         Some(_) => Ok(()),

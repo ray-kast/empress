@@ -40,21 +40,21 @@ pub(in crate::server) struct PlayerMut<'a> {
     keys: &'a mut KeyMap,
 }
 
-impl<'a> Drop for PlayerMut<'a> {
+impl Drop for PlayerMut<'_> {
     fn drop(&mut self) {
         update_key(self.keys, &self.old_key, self.player);
         *self.poison = false;
     }
 }
 
-impl<'a> ops::Deref for PlayerMut<'a> {
+impl ops::Deref for PlayerMut<'_> {
     type Target = Player;
 
     #[inline]
     fn deref(&self) -> &Self::Target { self.player }
 }
 
-impl<'a> ops::DerefMut for PlayerMut<'a> {
+impl ops::DerefMut for PlayerMut<'_> {
     #[inline]
     fn deref_mut(&mut self) -> &mut Self::Target { self.player }
 }

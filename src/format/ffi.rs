@@ -125,7 +125,7 @@ pub struct NoTopic;
 #[repr(transparent)]
 pub struct Topic<T>(pub T);
 
-impl<'a> MarshalTopic<'a> for NoTopic {}
+impl MarshalTopic<'_> for NoTopic {}
 impl<'a, T: TryFrom<CowValue<'a>, Error = Error>> MarshalTopic<'a> for Topic<T> {}
 
 impl<'a> TryFrom<Option<CowValue<'a>>> for NoTopic {

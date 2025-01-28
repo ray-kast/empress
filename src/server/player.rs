@@ -1,6 +1,7 @@
 use std::{collections::HashMap, fmt::Debug, future::Future, time::Instant};
 
 use anyhow::{anyhow, Context};
+use spin::mutex::SpinMutex;
 use zbus::{
     names::{BusName, WellKnownName},
     zvariant::{ObjectPath, OwnedValue},
@@ -8,9 +9,8 @@ use zbus::{
 };
 
 use super::{
-    mpris,
-    mpris::{player::PlaybackStatus, MediaPlayerProxy, PlayerProxy},
-    MatchPlayer,
+    mpris::{self, player::PlaybackStatus, MediaPlayerProxy, PlayerProxy},
+    MatchPlayer, Position,
 };
 use crate::{timeout::Timeout, Offset, Result};
 
@@ -27,10 +27,11 @@ pub(super) trait Action {
     ) -> impl Future<Output = Result<Self::Output>>;
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub(super) struct Player {
     status: PlaybackStatus,
     last_update: Instant,
+    position: SpinMutex<Option<Position>>,
     mp2: Timeout<MediaPlayerProxy<'static>>,
     inner: Timeout<PlayerProxy<'static>>,
 }
@@ -66,6 +67,7 @@ impl Player {
         let mut ret = Self {
             status: PlaybackStatus::Stopped,
             last_update: now,
+            position: SpinMutex::new(None),
             mp2: MediaPlayerProxy::builder(conn)
                 .destination(name.clone())
                 .context("Error setting MediaPlayer2 proxy destination")?
@@ -102,9 +104,7 @@ impl Player {
     //////// Accessors ////////
 
     #[inline]
-    pub fn status(&self) -> PlaybackStatus {
-        self.status
-    }
+    pub fn status(&self) -> PlaybackStatus { self.status }
 
     #[inline]
     pub fn update_status(&mut self, status: PlaybackStatus) -> Option<Instant> {
@@ -115,19 +115,65 @@ impl Player {
         let now = Instant::now();
         self.status = status;
         self.last_update = now;
+        if let Some(ref mut pos) = *self.position.lock() {
+            pos.update_status(Some(status == PlaybackStatus::Playing), None, now);
+        }
         Some(now)
     }
 
     #[inline]
-    pub fn last_update(&self) -> Instant {
-        self.last_update
-    }
+    pub fn last_update(&self) -> Instant { self.last_update }
 
     #[inline]
     pub fn force_update(&mut self) -> Instant {
         let now = Instant::now();
         self.last_update = now;
         now
+    }
+
+    pub async fn force_update_position(&self, micros: Option<i64>) -> Result<Position> {
+        fn update_pos(
+            pos: &mut Option<Position>,
+            micros: i64,
+            status: PlaybackStatus,
+            rate: f64,
+            now: Instant,
+        ) -> Position {
+            if let Some(pos) = pos {
+                pos.seek(micros, now);
+
+                *pos
+            } else {
+                let p = Position::new(micros, status == PlaybackStatus::Playing, rate, now);
+                *pos = Some(p);
+                p
+            }
+        }
+
+        let now = Instant::now();
+        let micros = if let Some(micros) = micros {
+            micros
+        } else {
+            timeout(&self.inner, PlayerProxy::position)
+                .await
+                .context("Proxy property get for Position failed")?
+        };
+        let rate = self.rate().await?;
+
+        // NB: do NOT put any async code below, as this is a blocking mutex
+        Ok(update_pos(
+            &mut self.position.lock(),
+            micros,
+            self.status,
+            rate,
+            now,
+        ))
+    }
+
+    pub fn update_rate(&self, rate: f64) {
+        if let Some(ref mut p) = *self.position.lock() {
+            p.update_status(None, Some(rate), None);
+        }
     }
 
     #[inline]
@@ -196,8 +242,8 @@ impl Player {
     }
 
     #[allow(clippy::cast_possible_truncation)]
-    pub async fn set_position(&mut self, id: ObjectPath<'_>, secs: i64) -> Result {
-        timeout(&self.inner, |p| p.set_position(id, secs))
+    pub async fn set_position(&mut self, id: ObjectPath<'_>, micros: i64) -> Result {
+        timeout(&self.inner, |p| p.set_position(id, micros))
             .await
             .context("Proxy call for SetPosition failed")?;
 
@@ -226,6 +272,12 @@ impl Player {
             .context("Proxy property get for PlaybackStatus failed")
     }
 
+    pub async fn rate(&self) -> Result<f64> {
+        timeout(&self.inner, PlayerProxy::rate)
+            .await
+            .context("Proxy property get for Rate failed")
+    }
+
     pub async fn metadata(&self) -> Result<HashMap<String, OwnedValue>> {
         timeout(&self.inner, PlayerProxy::metadata)
             .await
@@ -244,10 +296,12 @@ impl Player {
             .context("Proxy property set for Volume failed")
     }
 
-    pub async fn position(&self) -> Result<i64> {
-        timeout(&self.inner, PlayerProxy::position)
-            .await
-            .context("Proxy property get for Position failed")
+    pub async fn position(&self) -> Result<Position> {
+        if let Some(pos) = *self.position.lock() {
+            Ok(pos)
+        } else {
+            self.force_update_position(None).await
+        }
     }
 
     pub async fn can_go_next(&self) -> Result<bool> {
@@ -293,7 +347,7 @@ impl Player {
         let meta = self.metadata().await?;
 
         let pos = match pos {
-            Offset::Relative(p) => self.position().await? + (p * 1e6).round() as i64,
+            Offset::Relative(p) => self.position().await?.get(None) + (p * 1e6).round() as i64,
             Offset::Absolute(p) => (p * 1e6).round() as i64,
         };
 
@@ -349,9 +403,7 @@ impl MatchPlayer for Player {
             .unwrap_or("")
     }
 
-    fn status(&self) -> PlaybackStatus {
-        self.status
-    }
+    fn status(&self) -> PlaybackStatus { self.status }
 }
 
 trait IntoOption {
@@ -364,18 +416,14 @@ impl IntoOption for bool {
     type Output = ();
 
     #[inline]
-    fn into_option(self) -> Option<Self::Output> {
-        self.then_some(())
-    }
+    fn into_option(self) -> Option<Self::Output> { self.then_some(()) }
 }
 
 impl<T> IntoOption for Option<T> {
     type Output = T;
 
     #[inline]
-    fn into_option(self) -> Option<Self::Output> {
-        self
-    }
+    fn into_option(self) -> Option<Self::Output> { self }
 }
 
 macro_rules! action {
