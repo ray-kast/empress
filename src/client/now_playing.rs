@@ -35,7 +35,7 @@ struct Player {
 
 #[derive(Debug, Clone, PartialEq, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
-struct Status {
+struct NowPlaying {
     status: PlaybackStatus,
     player: Player,
     rate: f64,
@@ -66,7 +66,7 @@ struct Status {
     user_rating: Option<f64>,
 }
 
-impl Status {
+impl NowPlaying {
     fn capture_position(&self) -> Option<Position> {
         self.position
             .map(|p| Position::capture(p, self.status.is_playing(), self.rate))
@@ -123,7 +123,7 @@ fn parse_datetime(val: OwnedValue) -> Result<DateTime> {
         .context("Error parsing date string")
 }
 
-impl TryFrom<PlayerStatus> for Status {
+impl TryFrom<PlayerStatus> for NowPlaying {
     type Error = Error;
 
     fn try_from(status: PlayerStatus) -> Result<Self> {
@@ -203,7 +203,7 @@ impl TryFrom<PlayerStatus> for Status {
     }
 }
 
-impl MatchPlayer for Status {
+impl MatchPlayer for NowPlaying {
     fn bus(&self) -> &str { self.player.bus.as_ref().map_or("", |s| s) }
 
     fn status(&self) -> PlaybackStatus { self.status }
@@ -238,7 +238,7 @@ pub async fn run(
     Ok(())
 }
 
-enum Event<'a> {
+enum WatchEvent<'a> {
     TickSec,
     TickThrottled,
     Update(Option<PropertyChanged<'a, PlayerStatus>>),
@@ -248,7 +248,7 @@ enum Event<'a> {
 const MICROS_PER_SEC: i64 = 1_000_000;
 const THROTTLE_MILLIS: u32 = 60;
 
-async fn tick(status: &Status) -> Option<Event<'static>> {
+async fn watch_tick(status: &NowPlaying) -> Option<WatchEvent<'static>> {
     if !status.status.is_playing() {
         return None;
     }
@@ -276,10 +276,10 @@ async fn tick(status: &Status) -> Option<Event<'static>> {
 
     if sleep_millis > THROTTLE_MILLIS.into() {
         tokio::time::sleep(Duration::from_millis(sleep_millis)).await;
-        Some(Event::TickSec)
+        Some(WatchEvent::TickSec)
     } else {
         tokio::time::sleep(Duration::from_millis(THROTTLE_MILLIS.into())).await;
-        Some(Event::TickThrottled)
+        Some(WatchEvent::TickThrottled)
     }
 }
 
@@ -287,7 +287,7 @@ async fn run_watch(
     proxy: Timeout<EmpressProxy<'_>>,
     player: server::PlayerOpts,
     mut fmt: Formatter,
-    mut status: Status,
+    mut status: NowPlaying,
 ) -> Result<()> {
     let mut position = status.capture_position();
 
@@ -302,13 +302,13 @@ async fn run_watch(
 
     loop {
         let event = tokio::select! {
-            Some(e) = tick(&status) => e,
-            s = stream.next() => Event::Update(s),
-            r = tokio::signal::ctrl_c() => Event::Stop(r),
+            Some(e) = watch_tick(&status) => e,
+            s = stream.next() => WatchEvent::Update(s),
+            r = tokio::signal::ctrl_c() => WatchEvent::Stop(r),
         };
 
         match event {
-            Event::TickSec => {
+            WatchEvent::TickSec => {
                 if let Some(pos) = position {
                     let last = status.position;
                     let curr = pos.get(None);
@@ -323,9 +323,9 @@ async fn run_watch(
                     );
                 }
             },
-            Event::TickThrottled => status.position = position.map(|p| p.get(None)),
-            Event::Update(Some(s)) => {
-                let next: Status = Timeout::from(s)
+            WatchEvent::TickThrottled => status.position = position.map(|p| p.get(None)),
+            WatchEvent::Update(Some(s)) => {
+                let next: NowPlaying = Timeout::from(s)
                     .try_run(Duration::from_secs(1), PropertyChanged::get)
                     .await
                     .context("Error parsing property value")?
@@ -338,8 +338,8 @@ async fn run_watch(
                 status = next;
                 position = status.capture_position();
             },
-            Event::Update(None) => break Err(anyhow::anyhow!("Empress server hung up")),
-            Event::Stop(r) => break r.context("Error catching ^C"),
+            WatchEvent::Update(None) => break Err(anyhow::anyhow!("Empress server hung up")),
+            WatchEvent::Stop(r) => break r.context("Error catching ^C"),
         }
 
         fmt.print(&status)?;
@@ -357,22 +357,28 @@ struct Formatter {
     last: Option<String>,
 }
 
+const FORMAT_PRETTY: &str = "{{ status | sym }} {{ artists |! join(', ') ?? 'Unknown' }} — {{ \
+                             title }} {{ position |! time ?? '-:--' }}/{{ length |! time }}";
+
 impl Formatter {
     fn new(format: NowPlayingFormat, watch_zero: Option<bool>) -> Result<Self> {
         Ok(Self {
             ty: match (format.kind, format.string, format.file) {
                 (Some(k), None, None) => match k {
                     FormatKind::Json => FormatterType::Json,
-                    FormatKind::Pretty => {
-                        FormatterType::Pretty(Cow::Borrowed(todo!("pretty format syntax")))
-                    },
+                    FormatKind::Pretty => FormatterType::Pretty(FORMAT_PRETTY.into()),
                 },
                 (None, Some(s), None) => FormatterType::Pretty(s.into()),
-                (None, None, Some(p)) => FormatterType::Pretty(
-                    fs::read_to_string(&p)
-                        .with_context(|| format!("Error reading format from {p:?}"))?
-                        .into(),
-                ),
+                (None, None, Some(p)) => {
+                    let mut s = fs::read_to_string(&p)
+                        .with_context(|| format!("Error reading format from {p:?}"))?;
+
+                    if let Some(t) = s.strip_suffix('\n') {
+                        s.truncate(t.len());
+                    }
+
+                    FormatterType::Pretty(s.into())
+                },
                 (..) => unreachable!(),
             },
             watch_sep: watch_zero.map(|z| if z { '\0' } else { '\n' }),
@@ -380,7 +386,7 @@ impl Formatter {
         })
     }
 
-    fn print(&mut self, status: &Status) -> Result {
+    fn print(&mut self, status: &NowPlaying) -> Result {
         let mut s: String = match self.ty {
             FormatterType::Json => serde_json::to_string(status)?,
             FormatterType::Pretty(ref s) => format::eval(s, status)?,

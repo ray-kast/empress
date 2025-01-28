@@ -144,20 +144,21 @@ async fn try_send<
     with: &'a Timeout<T>,
     call: F,
 ) -> Result<R> {
-    const MAX_TRIES: usize = 5;
+    const TRIES: u32 = 5;
+    const DELAY_MILLIS: u64 = 5;
 
     let mut i = 0;
 
     loop {
         match with.try_run(Duration::from_secs(2), &call).await {
-            Err(e) if i < MAX_TRIES => warn!("Request failed: {e}"),
+            Err(e) if i < TRIES => warn!("Request failed: {e}"),
             r => break r.context("Unable to contact empress server"),
         }
 
         i += 1;
         info!("Retry attempt {i}");
 
-        tokio::time::sleep(Duration::from_millis(20)).await;
-        assert!(i <= MAX_TRIES);
+        tokio::time::sleep(Duration::from_millis(DELAY_MILLIS << i)).await;
+        assert!(i <= TRIES);
     }
 }

@@ -37,7 +37,7 @@ pub fn all() -> Functions {
 
 //////// Helper functions
 
-fn hmss_micros(mut micros: i64, neg_zero: bool) -> String {
+fn ydhmss_micros(mut micros: i64, neg_zero: bool) -> String {
     let mut s = String::new();
 
     if micros < 0 || micros == 0 && neg_zero {
@@ -48,10 +48,18 @@ fn hmss_micros(mut micros: i64, neg_zero: bool) -> String {
     let mut sec = micros / 1_000_000;
     let mut min = sec / 60;
     sec %= 60;
-    let hr = min / 60;
+    let mut hr = min / 60;
     min %= 60;
+    let mut day = hr / 24;
+    hr %= 24;
+    let yr = day / 365;
+    day %= 365;
 
-    if hr > 0 {
+    if yr > 0 {
+        write!(s, "{yr:01}{day:02}:{hr:02}:{min:02}:{sec:02}").unwrap();
+    } else if day > 0 {
+        write!(s, "{day:01}:{hr:02}:{min:02}:{sec:02}").unwrap();
+    } else if hr > 0 {
         write!(s, "{hr:01}:{min:02}:{sec:02}").unwrap();
     } else {
         write!(s, "{min:01}:{sec:02}").unwrap();
@@ -112,7 +120,7 @@ fn compact(inp: Input) -> Output {
 fn eta(inp: Input) -> Output {
     let (_ctx, Topic(Number::<i64>(len)), (Number::<i64>(duration), ())) = inp.try_into()?;
 
-    Ok(Owned(Value::String(hmss_micros(len - duration, true))))
+    Ok(Owned(Value::String(ydhmss_micros(len - duration, true))))
 }
 
 fn join(inp: Input) -> Output {
@@ -220,7 +228,7 @@ fn sym(inp: Input) -> Output {
 fn time(inp: Input) -> Output {
     let (_ctx, Topic(Number::<i64>(len)), ()) = inp.try_into()?;
 
-    Ok(Owned(Value::String(hmss_micros(len, false))))
+    Ok(Owned(Value::String(ydhmss_micros(len, false))))
 }
 
 fn trim(inp: Input) -> Output { stream_str(inp, |s| s.trim().to_owned()) }
