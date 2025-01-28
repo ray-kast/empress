@@ -172,26 +172,29 @@ impl Server {
         ctx: SignalEmitter<'static>,
         stop_rx: mpsc::Receiver<()>,
     ) -> Result<JoinHandle<()>> {
-        let mut matcher = SignalMatcher::new(self.dbus.clone(), [
-            MatchRule::builder()
-                .msg_type(zbus::message::Type::Signal)
-                .interface("org.freedesktop.DBus.Properties")
-                .unwrap()
-                .member("PropertiesChanged")
-                .unwrap()
-                .path(&*mpris::OBJECT_PATH)
-                .unwrap()
-                .build(),
-            MatchRule::builder()
-                .msg_type(zbus::message::Type::Signal)
-                .interface(&*mpris::player::INTERFACE)
-                .unwrap()
-                .member("Seeked")
-                .unwrap()
-                .path(&*mpris::OBJECT_PATH)
-                .unwrap()
-                .build(),
-        ])
+        let mut matcher = SignalMatcher::new(
+            self.dbus.clone(),
+            [
+                MatchRule::builder()
+                    .msg_type(zbus::message::Type::Signal)
+                    .interface("org.freedesktop.DBus.Properties")
+                    .unwrap()
+                    .member("PropertiesChanged")
+                    .unwrap()
+                    .path(&*mpris::OBJECT_PATH)
+                    .unwrap()
+                    .build(),
+                MatchRule::builder()
+                    .msg_type(zbus::message::Type::Signal)
+                    .interface(&*mpris::player::INTERFACE)
+                    .unwrap()
+                    .member("Seeked")
+                    .unwrap()
+                    .path(&*mpris::OBJECT_PATH)
+                    .unwrap()
+                    .build(),
+            ],
+        )
         .await
         .context("Error registering background scan matchers")?;
 
@@ -285,14 +288,17 @@ impl Server {
                                     break false;
                                 },
                                 Err(e) => {
-                                    i += 1;
                                     debug!(
-                                        "Error processing NameOwnerChanged signal (try {i}): {e:?}"
+                                        "Error processing NameOwnerChanged signal (try {}): {e:?}",
+                                        i + 1
                                     );
                                     tokio::time::sleep(Duration::from_millis(DELAY_MILLIS << i))
                                         .await;
                                 },
                             }
+
+                            i += 1;
+                            assert!(i <= TRIES);
                         }
                     },
                 }

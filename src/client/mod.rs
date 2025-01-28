@@ -211,9 +211,13 @@ impl TryFrom<PlayerStatus> for NowPlayingResult {
 }
 
 impl MatchPlayer for NowPlayingResult {
-    fn bus(&self) -> &str { self.player.bus.as_ref().map_or("", |s| s) }
+    fn bus(&self) -> &str {
+        self.player.bus.as_ref().map_or("", |s| s)
+    }
 
-    fn status(&self) -> PlaybackStatus { self.status }
+    fn status(&self) -> PlaybackStatus {
+        self.status
+    }
 }
 
 macro_rules! courtesy_line {
@@ -389,7 +393,7 @@ async fn watch_now_playing(
     format: Option<&str>,
     zero: bool,
     mut status: NowPlayingResult,
-    mut last: Option<String>,
+    mut last: String,
 ) -> Result<()> {
     enum Event<'a> {
         TickSec,
@@ -499,9 +503,13 @@ async fn watch_now_playing(
             Event::Stop(r) => break r.context("Error catching ^C"),
         }
 
-        last = print_now_playing(&status, format, Some(now_playing_sep(zero)), last, || {
-            sep(zero);
-        })?;
+        last = print_now_playing(
+            &status,
+            format,
+            Some(now_playing_sep(zero)),
+            Some(last),
+            || sep(zero),
+        )?;
     }
 }
 
@@ -512,24 +520,23 @@ fn print_now_playing(
     sep: Option<char>,
     last: Option<String>,
     post_print: impl FnOnce(),
-) -> Result<Option<String>> {
-    if let Some(format) = format {
-        let mut s = format::eval(format, status)?;
-
-        if let Some(c) = sep {
-            s = s.replace(c, " ");
-        }
-
-        if last.is_none_or(|l| l != s) {
-            print!("{s}");
-            post_print();
-        }
-
-        Ok(Some(s))
+) -> Result<String> {
+    let mut s = if let Some(format) = format {
+        format::eval(format, status)?
     } else {
-        serde_json::to_writer(io::stdout(), status)?;
-        Ok(None)
+        serde_json::to_string(status)?
+    };
+
+    if let Some(c) = sep {
+        s = s.replace(c, " ");
     }
+
+    if last.is_none_or(|l| l != s) {
+        print!("{s}");
+        post_print();
+    }
+
+    Ok(s)
 }
 
 async fn try_send<
@@ -556,5 +563,6 @@ async fn try_send<
         info!("Retry attempt {i}");
 
         tokio::time::sleep(Duration::from_millis(20)).await;
+        assert!(i <= MAX_TRIES);
     }
 }

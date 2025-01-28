@@ -72,7 +72,7 @@ mod tests {
     fn test_path() {
         assert_eq!(
             EmpressProxy::PATH.as_ref().map(ObjectPath::as_str),
-            Some(crate::SERVER_PATH.replace("/debug/", "/").as_str())
+            Some(crate::SERVER_PATH.as_str())
         );
     }
 }
