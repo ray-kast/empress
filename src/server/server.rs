@@ -172,29 +172,26 @@ impl Server {
         ctx: SignalEmitter<'static>,
         stop_rx: mpsc::Receiver<()>,
     ) -> Result<JoinHandle<()>> {
-        let mut matcher = SignalMatcher::new(
-            self.dbus.clone(),
-            [
-                MatchRule::builder()
-                    .msg_type(zbus::message::Type::Signal)
-                    .interface("org.freedesktop.DBus.Properties")
-                    .unwrap()
-                    .member("PropertiesChanged")
-                    .unwrap()
-                    .path(&*mpris::OBJECT_PATH)
-                    .unwrap()
-                    .build(),
-                MatchRule::builder()
-                    .msg_type(zbus::message::Type::Signal)
-                    .interface(&*mpris::player::INTERFACE)
-                    .unwrap()
-                    .member("Seeked")
-                    .unwrap()
-                    .path(&*mpris::OBJECT_PATH)
-                    .unwrap()
-                    .build(),
-            ],
-        )
+        let mut matcher = SignalMatcher::new(self.dbus.clone(), [
+            MatchRule::builder()
+                .msg_type(zbus::message::Type::Signal)
+                .interface("org.freedesktop.DBus.Properties")
+                .unwrap()
+                .member("PropertiesChanged")
+                .unwrap()
+                .path(&*mpris::OBJECT_PATH)
+                .unwrap()
+                .build(),
+            MatchRule::builder()
+                .msg_type(zbus::message::Type::Signal)
+                .interface(&*mpris::player::INTERFACE)
+                .unwrap()
+                .member("Seeked")
+                .unwrap()
+                .path(&*mpris::OBJECT_PATH)
+                .unwrap()
+                .build(),
+        ])
         .await
         .context("Error registering background scan matchers")?;
 
@@ -843,7 +840,7 @@ impl Server {
                     let mut put = vec![];
 
                     for player in players.iter_all() {
-                        if player.playback_status().await? == PlaybackStatus::Playing
+                        if player.playback_status().await?.is_playing()
                             && player.can_pause().await?
                         {
                             put.push(player.bus().to_owned());

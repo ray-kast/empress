@@ -1,5 +1,47 @@
 use std::time::Instant;
 
+use spin::mutex::SpinMutex;
+
+#[derive(Debug, Default)]
+pub struct PositionCache(SpinMutex<Option<Position>>);
+
+impl PositionCache {
+    pub fn get(&self) -> Option<Position> { *self.0.lock() }
+
+    pub fn try_update_status(
+        &self,
+        playing: Option<bool>,
+        rate: Option<f64>,
+        at: impl Into<Option<Instant>>,
+    ) {
+        if let Some(pos) = &mut *self.0.lock() {
+            pos.update_status(playing, rate, at);
+        }
+    }
+
+    pub fn force_seek(
+        &self,
+        micros: i64,
+        playing: bool,
+        rate: f64,
+        at: impl Into<Option<Instant>>,
+    ) -> Position {
+        let mut pos = self.0.lock();
+        if let Some(pos) = &mut *pos {
+            pos.seek(micros, at);
+
+            *pos
+        } else {
+            let p = at.into().map_or_else(
+                || Position::capture(micros, playing, rate),
+                |a| Position::new(micros, playing, rate, a),
+            );
+            *pos = Some(p);
+            p
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy)]
 pub struct Position {
     micros: i64,

@@ -108,6 +108,18 @@ pub mod player {
         Stopped,
     }
 
+    // These are all trivial, but this should help clarify a lot of ad-hoc
+    // logic full of Boolean connectives elsewhere
+    impl PlaybackStatus {
+        pub const fn is_playing(self) -> bool { matches!(self, Self::Playing) }
+
+        pub const fn can_play(self) -> bool { matches!(self, Self::Paused) }
+
+        pub const fn can_pause(self) -> bool { matches!(self, Self::Playing) }
+
+        pub const fn can_stop(self) -> bool { !matches!(self, Self::Stopped) }
+    }
+
     impl<'a> TryFrom<zvariant::Value<'a>> for PlaybackStatus {
         type Error = zvariant::Error;
 

@@ -72,7 +72,7 @@ struct NowPlayingResult {
 impl NowPlayingResult {
     fn capture_position(&self) -> Option<Position> {
         self.position
-            .map(|p| Position::capture(p, self.status == PlaybackStatus::Playing, self.rate))
+            .map(|p| Position::capture(p, self.status.is_playing(), self.rate))
     }
 }
 
@@ -211,13 +211,9 @@ impl TryFrom<PlayerStatus> for NowPlayingResult {
 }
 
 impl MatchPlayer for NowPlayingResult {
-    fn bus(&self) -> &str {
-        self.player.bus.as_ref().map_or("", |s| s)
-    }
+    fn bus(&self) -> &str { self.player.bus.as_ref().map_or("", |s| s) }
 
-    fn status(&self) -> PlaybackStatus {
-        self.status
-    }
+    fn status(&self) -> PlaybackStatus { self.status }
 }
 
 macro_rules! courtesy_line {
@@ -379,12 +375,12 @@ async fn now_playing(
     )?;
 
     if watch {
-        watch_now_playing(proxy, player, format, zero, status, last).await
+        watch_now_playing(proxy, player, format, zero, status, last).await?;
     } else {
         courtesy_line!();
-
-        Ok(())
     }
+
+    Ok(())
 }
 
 async fn watch_now_playing(
@@ -413,7 +409,7 @@ async fn watch_now_playing(
     }
 
     async fn tick(status: &NowPlayingResult) -> Option<Event<'static>> {
-        if status.status != PlaybackStatus::Playing {
+        if !status.status.is_playing() {
             return None;
         }
 
@@ -485,8 +481,8 @@ async fn watch_now_playing(
             },
             Event::TickThrottled => status.position = position.map(|p| p.get(None)),
             Event::Update(Some(s)) => {
-                let next: NowPlayingResult = s
-                    .get()
+                let next: NowPlayingResult = Timeout::from(s)
+                    .try_run(Duration::from_secs(1), PropertyChanged::get)
                     .await
                     .context("Error parsing property value")?
                     .try_into()?;
@@ -499,7 +495,7 @@ async fn watch_now_playing(
                 status = next;
                 position = status.capture_position();
             },
-            Event::Update(None) => anyhow::bail!("Empress server hung up"),
+            Event::Update(None) => break Err(anyhow::anyhow!("Empress server hung up")),
             Event::Stop(r) => break r.context("Error catching ^C"),
         }
 

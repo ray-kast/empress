@@ -1,7 +1,6 @@
 use std::{collections::HashMap, fmt::Debug, future::Future, time::Instant};
 
 use anyhow::{anyhow, Context};
-use spin::mutex::SpinMutex;
 use zbus::{
     names::{BusName, WellKnownName},
     zvariant::{ObjectPath, OwnedValue},
@@ -10,6 +9,7 @@ use zbus::{
 
 use super::{
     mpris::{self, player::PlaybackStatus, MediaPlayerProxy, PlayerProxy},
+    position::PositionCache,
     MatchPlayer, Position,
 };
 use crate::{timeout::Timeout, Offset, Result};
@@ -31,7 +31,7 @@ pub(super) trait Action {
 pub(super) struct Player {
     status: PlaybackStatus,
     last_update: Instant,
-    position: SpinMutex<Option<Position>>,
+    position: PositionCache,
     mp2: Timeout<MediaPlayerProxy<'static>>,
     inner: Timeout<PlayerProxy<'static>>,
 }
@@ -67,7 +67,7 @@ impl Player {
         let mut ret = Self {
             status: PlaybackStatus::Stopped,
             last_update: now,
-            position: SpinMutex::new(None),
+            position: PositionCache::default(),
             mp2: MediaPlayerProxy::builder(conn)
                 .destination(name.clone())
                 .context("Error setting MediaPlayer2 proxy destination")?
@@ -115,9 +115,8 @@ impl Player {
         let now = Instant::now();
         self.status = status;
         self.last_update = now;
-        if let Some(ref mut pos) = *self.position.lock() {
-            pos.update_status(Some(status == PlaybackStatus::Playing), None, now);
-        }
+        self.position
+            .try_update_status(Some(status.is_playing()), None, now);
         Some(now)
     }
 
@@ -132,24 +131,6 @@ impl Player {
     }
 
     pub async fn force_update_position(&self, micros: Option<i64>) -> Result<Position> {
-        fn update_pos(
-            pos: &mut Option<Position>,
-            micros: i64,
-            status: PlaybackStatus,
-            rate: f64,
-            now: Instant,
-        ) -> Position {
-            if let Some(pos) = pos {
-                pos.seek(micros, now);
-
-                *pos
-            } else {
-                let p = Position::new(micros, status == PlaybackStatus::Playing, rate, now);
-                *pos = Some(p);
-                p
-            }
-        }
-
         let now = Instant::now();
         let micros = if let Some(micros) = micros {
             micros
@@ -160,20 +141,13 @@ impl Player {
         };
         let rate = self.rate().await?;
 
-        // NB: do NOT put any async code below, as this is a blocking mutex
-        Ok(update_pos(
-            &mut self.position.lock(),
-            micros,
-            self.status,
-            rate,
-            now,
-        ))
+        Ok(self
+            .position
+            .force_seek(micros, self.status.is_playing(), rate, now))
     }
 
     pub fn update_rate(&self, rate: f64) {
-        if let Some(ref mut p) = *self.position.lock() {
-            p.update_status(None, Some(rate), None);
-        }
+        self.position.try_update_status(None, Some(rate), None);
     }
 
     #[inline]
@@ -297,7 +271,7 @@ impl Player {
     }
 
     pub async fn position(&self) -> Result<Position> {
-        if let Some(pos) = *self.position.lock() {
+        if let Some(pos) = self.position.get() {
             Ok(pos)
         } else {
             self.force_update_position(None).await
@@ -473,7 +447,7 @@ action!(
 );
 action!(
     pub Pause: fn() -> (),
-    |Self, p| p.playback_status().await? == PlaybackStatus::Playing && p.can_pause().await?,
+    |Self, p| p.playback_status().await?.can_pause() && p.can_pause().await?,
     |Self, p, ()| p.pause().await,
 );
 action!(
@@ -491,12 +465,12 @@ action!(
 );
 action!(
     pub Stop: fn() -> (),
-    |Self, p| p.playback_status().await? != PlaybackStatus::Stopped && p.can_control().await?,
+    |Self, p| p.playback_status().await?.can_stop() && p.can_control().await?,
     |Self, p, ()| p.stop().await,
 );
 action!(
     pub Play: fn() -> (),
-    |Self, p| p.playback_status().await? != PlaybackStatus::Playing && p.can_play().await?,
+    |Self, p| p.playback_status().await?.can_play() && p.can_play().await?,
     |Self, p, ()| p.play().await,
 );
 action!(
