@@ -7,8 +7,7 @@ use nom::{
     combinator::{eof, map},
     error::ErrorKind,
     multi::many0,
-    sequence::tuple,
-    Finish, IResult, InputTakeAtPosition,
+    Finish, IResult, Input, Parser,
 };
 use serde_json::Number;
 
@@ -138,58 +137,27 @@ fn btag(val: &'static str, b: Bit<'static>) -> impl for<'a> Fn(&'a str) -> BResu
 
 fn any1(s: &str) -> IResult<&str, &str> { s.split_at_position1_complete(|_| true, ErrorKind::Char) }
 
-// Adapted from split_at_position1_complete
-fn split_before<'a, O, E>(
-    allow_empty: bool,
-    mut parser: impl nom::Parser<&'a str, O, E>,
-) -> impl FnMut(&'a str) -> IResult<&'a str, &'a str> {
-    #[expect(
-        clippy::unnecessary_wraps,
-        reason = "This is a domain-specific helper function"
-    )]
-    #[inline]
-    unsafe fn ok(s: &str, i: usize) -> IResult<&str, &str> {
-        Ok((s.get_unchecked(i..), s.get_unchecked(..i)))
-    }
+fn split_at_parse1_complete<I: Input, P: Parser<I>, E: nom::error::ParseError<I>>(
+    input: I,
+    parser: &mut P,
+    e: ErrorKind,
+) -> IResult<I, I, E> {
+    let i = input
+        .iter_indices()
+        .find_map(|(i, _)| (parser.parse_complete(input.take_from(i)).is_ok()).then_some(i));
 
-    #[inline]
-    fn err(input: &str) -> IResult<&str, &str> {
-        Err(nom::Err::Error(nom::error::Error {
-            input,
-            code: ErrorKind::Eof,
-        }))
-    }
-
-    move |s| match s.char_indices().find_map(|(i, _)| {
-        // char_indices() returns an index that is already
-        // a char boundary
-        let s = unsafe { s.get_unchecked(i..) };
-
-        if parser.parse(s).is_ok() && (allow_empty || i != 0) {
-            Some(i)
-        } else {
-            None
-        }
-    }) {
-        Some(0) => err(s),
-        // char_indices() returns a byte index that is already
-        // in the slice at a char boundary
-        Some(i) => unsafe { ok(s, i) },
-        None => {
-            if s.is_empty() {
-                err(s)
-            } else {
-                // The end of slice is a char boundary
-                unsafe { ok(s, s.len()) }
-            }
-        },
+    match i {
+        Some(0) => Err(nom::Err::Error(E::from_error_kind(input, e))),
+        Some(i) => Ok(input.take_split(i)),
+        None if input.input_len() == 0 => Err(nom::Err::Error(E::from_error_kind(input, e))),
+        None => Ok(input.take_split(input.input_len())),
     }
 }
 
 //////// Lexer internals
 
 fn tokens(s: &str) -> IResult<&str, Vec<SpannedTok>> {
-    let (s, r) = many0(token())(s)?;
+    let (s, r) = many0(token()).parse_complete(s)?;
     let (s, _) = eof(s)?;
 
     Ok((
@@ -235,7 +203,8 @@ fn token() -> impl FnMut(&str) -> BResult {
                 int,
                 string("'"),
                 string("\""),
-            ))(s)?;
+            ))
+            .parse_complete(s)?;
 
             in_block = !matches!(t.1, Bit::BlockEnd);
 
@@ -243,13 +212,13 @@ fn token() -> impl FnMut(&str) -> BResult {
         } else {
             let mut terminator = alt((escape, btag("{{", Bit::BlockStart)));
 
-            match terminator(s) {
+            match terminator.parse_complete(s) {
                 Err(_) => {
                     // Performance note: this is possibly prone to quadratic
                     //                   backtracking, but the terminator isn't
                     //                   very long so hopefully it's not a huge
                     //                   deal.
-                    let (s, t) = split_before(false, terminator)(s)?;
+                    let (s, t) = split_at_parse1_complete(s, &mut terminator, ErrorKind::Alt)?;
 
                     Ok(bit(s, t, Bit::Fragment))
                 },
@@ -273,7 +242,8 @@ fn space(s: &str) -> BResult {
     let (s, t) = alt((
         nom::character::complete::line_ending,
         nom::character::complete::space1,
-    ))(s)?;
+    ))
+    .parse_complete(s)?;
 
     Ok(bit(s, t, |_| Bit::Whitespace))
 }
@@ -333,7 +303,7 @@ fn int(s: &str) -> BResult {
 }
 
 fn float(s: &str) -> BResult {
-    let (s2, (l, c, r)) = tuple((digit1, char('.'), digit1))(s)?;
+    let (s2, (l, c, r)) = (digit1, char('.'), digit1).parse_complete(s)?;
 
     try_bit(s, s2, &format!("{l}{c}{r}"), |t| {
         Number::from_str(t).map(Bit::Number)
@@ -350,16 +320,14 @@ fn string(delim: &'static str) -> impl for<'a> FnMut(&'a str) -> BResult<'a> {
         let mut out = String::new();
 
         let mut terminator = alt((
-            map(tuple((tag("\\"), any1)), |(t, c)| {
-                (Some(c), t.len() + c.len())
-            }),
+            map((tag("\\"), any1), |(t, c)| (Some(c), t.len() + c.len())),
             map(delim, |s| (None, s.len())),
         ));
 
         loop {
-            match terminator(s) {
+            match terminator.parse_complete(s) {
                 Err(_) => {
-                    let (s2, t) = split_before(false, &mut terminator)(s)?;
+                    let (s2, t) = split_at_parse1_complete(s, &mut terminator, ErrorKind::Alt)?;
                     s = s2;
                     len += t.len();
                     out.push_str(t);
