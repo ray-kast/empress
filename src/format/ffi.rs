@@ -109,11 +109,7 @@ impl MarshalNumber for i64 {
     }
 }
 
-impl<'a, T, A> TryFrom<Input<'a>> for (&'a Context, T, A)
-where
-    T: MarshalTopic<'a>,
-    A: Marshal<'a>,
-{
+impl<'a, T: MarshalTopic<'a>, A: Marshal<'a>> TryFrom<Input<'a>> for (&'a Context, T, A) {
     type Error = Error;
 
     fn try_from(Input { ctx, topic, args }: Input<'a>) -> Result<Self> {

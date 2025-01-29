@@ -41,33 +41,39 @@ impl From<ParseError<lexer::Token<'_>>> for Error {
     fn from(e: ParseError<lexer::Token>) -> Self { Self::Parse(e.map_token(|t| format!("{t:?}"))) }
 }
 
-pub fn eval(fmt: impl AsRef<str>, values: impl serde::Serialize) -> Result<String, Error> {
-    use interp::StreamAll;
+pub struct Formatter<'a>(Vec<ast::Segment<'a>>);
 
-    let toks = lexer::scan(fmt.as_ref());
-    log::trace!("{toks:?}");
-    let toks = toks?;
+impl<'a> Formatter<'a> {
+    pub fn compile<S: AsRef<str> + ?Sized + 'a>(fmt: &'a S) -> Result<Self, Error> {
+        let toks = lexer::scan(fmt.as_ref());
+        log::trace!("{toks:?}");
 
-    let ast = parser::FormatParser::new().parse(toks);
-    log::trace!("{ast:?}");
-    let ast = ast?;
+        let ast = parser::FormatParser::new().parse(toks?);
+        log::trace!("{ast:?}");
 
-    let values = match serde_json::to_value(values) {
-        Ok(serde_json::Value::Object(m)) => Ok(m),
-        Ok(v) => Err(Error::Values(anyhow::anyhow!(
-            "Value provided was not a JSON map ({v:?})",
-        ))),
-        Err(e) => Err(Error::Values(e.into())),
-    }?;
+        Ok(Self(ast?))
+    }
 
-    let mut out = String::new();
-    ast.stream_all(
-        &interp::Context {
-            values,
-            functions: functions::all(),
-        },
-        &mut out,
-    )?;
+    pub fn run<V: serde::Serialize>(&self, values: V) -> Result<String, Error> {
+        use interp::StreamAll;
 
-    Ok(out)
+        let values = match serde_json::to_value(values) {
+            Ok(serde_json::Value::Object(m)) => Ok(m),
+            Ok(v) => Err(Error::Values(anyhow::anyhow!(
+                "Value provided was not a JSON map ({v:?})",
+            ))),
+            Err(e) => Err(Error::Values(e.into())),
+        }?;
+
+        let mut out = String::new();
+        self.0.as_slice().stream_all(
+            &interp::Context {
+                values,
+                functions: functions::all(),
+            },
+            &mut out,
+        )?;
+
+        Ok(out)
+    }
 }

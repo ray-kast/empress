@@ -1,4 +1,7 @@
-use std::borrow::Cow::{Borrowed, Owned};
+use std::{
+    borrow::Cow::{Borrowed, Owned},
+    fmt::Write,
+};
 
 use super::{
     ffi,
@@ -14,14 +17,14 @@ pub enum Segment<'a> {
     Block(Option<Expr<'a>>),
 }
 
-impl<'a> Stream<'a> for Segment<'_> {
-    type Context = &'a Context;
+impl Stream for Segment<'_> {
+    type Context<'a> = &'a Context;
     type Error = Error;
 
-    fn stream(self, ctx: &Context, mut out: impl std::fmt::Write) -> Result<()> {
+    fn stream<W: Write>(&self, ctx: &Context, mut out: W) -> Result<()> {
         match self {
             Self::Fragment(s) => out.write_str(s).map_err(Into::into),
-            Self::Block(e) => e.map_or(Ok(()), |e| {
+            Self::Block(e) => e.as_ref().map_or(Ok(()), |e| {
                 e.eval(ctx, None)?
                     .as_ref()
                     .stream((), out)
@@ -35,10 +38,16 @@ impl<'a> Stream<'a> for Segment<'_> {
 #[derive(Debug)]
 pub struct Expr<'a>(pub Box<NullChain<'a>>);
 
-impl<'a, 's> Eval<'a> for Expr<'s> {
-    type Output = <NullChain<'s> as Eval<'a>>::Output;
+impl Eval for Expr<'_> {
+    type Output<'a>
+        = CowValue<'a>
+    where Self: 'a;
 
-    fn eval(self, ctx: &'a Context, topic: Option<CowValue<'a>>) -> Result<Self::Output> {
+    fn eval<'a>(
+        &'a self,
+        ctx: &'a Context,
+        topic: Option<CowValue<'a>>,
+    ) -> Result<Self::Output<'a>> {
         self.0.eval(ctx, topic)
     }
 }
@@ -49,10 +58,12 @@ pub enum NullChain<'a> {
     Bang(NullPipeline<'a>),
 }
 
-impl<'a> Eval<'a> for NullChain<'_> {
-    type Output = CowValue<'a>;
+impl Eval for NullChain<'_> {
+    type Output<'a>
+        = CowValue<'a>
+    where Self: 'a;
 
-    fn eval(self, ctx: &'a Context, topic: Option<CowValue<'a>>) -> Result<CowValue<'a>> {
+    fn eval<'a>(&'a self, ctx: &'a Context, topic: Option<CowValue<'a>>) -> Result<CowValue<'a>> {
         match self {
             Self::Chain(c, n) => match c.eval(ctx, topic.clone())? {
                 Borrowed(v) if is_null_like(v) => n.eval(ctx, topic),
@@ -70,10 +81,12 @@ pub enum NullPipeline<'a> {
     Pipe(Pipeline<'a>),
 }
 
-impl<'a> Eval<'a> for NullPipeline<'_> {
-    type Output = CowValue<'a>;
+impl Eval for NullPipeline<'_> {
+    type Output<'a>
+        = CowValue<'a>
+    where Self: 'a;
 
-    fn eval(self, ctx: &'a Context, topic: Option<CowValue<'a>>) -> Result<CowValue<'a>> {
+    fn eval<'a>(&'a self, ctx: &'a Context, topic: Option<CowValue<'a>>) -> Result<CowValue<'a>> {
         match self {
             Self::Bang(n, p) => match n.eval(ctx, topic)? {
                 v @ (Owned(Value::Null) | Borrowed(Value::Null)) => Ok(v),
@@ -90,10 +103,12 @@ pub enum Pipeline<'a> {
     Member(Member<'a>),
 }
 
-impl<'a> Eval<'a> for Pipeline<'_> {
-    type Output = CowValue<'a>;
+impl Eval for Pipeline<'_> {
+    type Output<'a>
+        = CowValue<'a>
+    where Self: 'a;
 
-    fn eval(self, ctx: &'a Context, topic: Option<CowValue<'a>>) -> Result<CowValue<'a>> {
+    fn eval<'a>(&'a self, ctx: &'a Context, topic: Option<CowValue<'a>>) -> Result<CowValue<'a>> {
         match self {
             Self::Pipe(p, l) => l.eval(ctx, Some(p.eval(ctx, topic)?)),
             Self::Member(l) => l.eval(ctx, topic),
@@ -113,10 +128,10 @@ fn lens_ident<'a>(lhs: CowValue<'a>, rhs: &str) -> Result<CowValue<'a>> {
     }
 }
 
-fn lens_index<'a, R: Eval<'a, Output = CowValue<'a>>>(
+fn lens_index<'a, R: Eval<Output<'a> = CowValue<'a>> + 'a>(
     ctx: &'a Context,
     lhs: CowValue<'a>,
-    rhs: R,
+    rhs: &'a R,
 ) -> Result<CowValue<'a>> {
     fn as_usize(i: &Value) -> Option<usize> { i.as_u64().and_then(|i| i.try_into().ok()) }
 
@@ -154,16 +169,37 @@ pub enum Member<'a> {
     Prim(Prim<'a>),
 }
 
-impl<'a> Eval<'a> for Member<'_> {
-    type Output = CowValue<'a>;
+impl Eval for Member<'_> {
+    type Output<'a>
+        = CowValue<'a>
+    where Self: 'a;
 
-    fn eval(self, ctx: &'a Context, topic: Option<CowValue<'a>>) -> Result<CowValue<'a>> {
+    fn eval<'a>(&'a self, ctx: &'a Context, topic: Option<CowValue<'a>>) -> Result<CowValue<'a>> {
         match self {
             Self::Dot(l, r) => lens_ident(l.eval(ctx, topic)?, r),
             Self::Index(l, r) => lens_index(ctx, l.eval(ctx, topic)?, r),
             Self::Prim(p) => p.eval(ctx, topic),
         }
     }
+}
+
+fn call<'a>(
+    ctx: &'a Context,
+    topic: Option<CowValue<'a>>,
+    ident: &str,
+    args: Option<&'a Args<'a>>,
+) -> Result<CowValue<'a>> {
+    let Some(args) = args
+        .as_ref()
+        .map_or_else(|| Ok(Some(vec![])), |a| a.eval(ctx, None))?
+    else {
+        return Ok(Owned(Value::Null));
+    };
+
+    ctx.functions
+        .get(ident)
+        .ok_or_else(|| Error::NoFunction(ident.into()))?(ffi::Input::new(ctx, topic, args))
+    .map_err(|e| Error::Ffi(ident.into(), e))
 }
 
 #[derive(Debug)]
@@ -177,10 +213,12 @@ pub enum Prim<'a> {
     Value(Value),
 }
 
-impl<'a> Eval<'a> for Prim<'_> {
-    type Output = CowValue<'a>;
+impl Eval for Prim<'_> {
+    type Output<'a>
+        = CowValue<'a>
+    where Self: 'a;
 
-    fn eval(self, ctx: &'a Context, topic: Option<CowValue<'a>>) -> Result<CowValue<'a>> {
+    fn eval<'a>(&'a self, ctx: &'a Context, topic: Option<CowValue<'a>>) -> Result<CowValue<'a>> {
         if matches!(self, Self::Value(_)) {
             assert_no_topic(&topic, &self)?;
         }
@@ -189,23 +227,17 @@ impl<'a> Eval<'a> for Prim<'_> {
             assert_topic(&topic, &self)?;
         }
 
+        #[expect(
+            clippy::needless_borrowed_reference,
+            reason = "`&ref s` is the least inelegant way I could think of to match &&str as &str"
+        )]
         match self {
             Self::Paren(e) => e.eval(ctx, topic),
             Self::LensIdent(i) => lens_ident(topic.unwrap_or_else(|| unreachable!()), i),
             Self::LensIndex(e) => lens_index(ctx, topic.unwrap_or_else(|| unreachable!()), e),
-            Self::Call(i, a) => {
-                let Some(args) = a.map_or_else(|| Ok(Some(vec![])), |a| a.eval(ctx, None))? else {
-                    return Ok(Owned(Value::Null));
-                };
-
-                ctx.functions
-                    .get(i)
-                    .ok_or_else(|| Error::NoFunction(i.into()))?(ffi::Input::new(
-                    ctx, topic, args,
-                ))
-                .map_err(|e| Error::Ffi(i.into(), e))
-            },
+            Self::Call(&ref i, a) => call(ctx, topic, i, a.as_ref()),
             Self::Array(a) => a
+                .as_ref()
                 .map_or_else(|| Ok(Some(vec![])), |a| a.eval(ctx, None))
                 .map(|v| {
                     v.map_or(Owned(Value::Null), |v| {
@@ -214,16 +246,16 @@ impl<'a> Eval<'a> for Prim<'_> {
                         ))
                     })
                 }),
-            Self::Ident(i) => match topic {
+            Self::Ident(&ref i) => match topic {
                 // A little hacky, but if a topic is present treat idents as a
                 // call rather than a value
-                topic @ Some(_) => Prim::Call(i, None).eval(ctx, topic),
+                topic @ Some(_) => call(ctx, topic, i, None),
                 None => match ctx.values.get(i) {
                     Some(v) => Ok(Borrowed(v)),
                     None => Err(Error::NoValue(i.into())),
                 },
             },
-            Self::Value(v) => Ok(Owned(v)),
+            Self::Value(v) => Ok(Borrowed(v)),
         }
     }
 }
@@ -234,11 +266,13 @@ pub enum Args<'a> {
     Arg(Arg<'a>),
 }
 
-impl<'a> Eval<'a> for Args<'_> {
-    type Output = Option<Vec<CowValue<'a>>>;
+impl Eval for Args<'_> {
+    type Output<'a>
+        = Option<Vec<CowValue<'a>>>
+    where Self: 'a;
 
-    fn eval(
-        self,
+    fn eval<'a>(
+        &'a self,
         ctx: &'a Context,
         topic: Option<CowValue<'a>>,
     ) -> Result<Option<Vec<CowValue<'a>>>> {
@@ -264,10 +298,16 @@ pub enum Arg<'a> {
     Expr(Expr<'a>),
 }
 
-impl<'a> Eval<'a> for Arg<'_> {
-    type Output = Option<CowValue<'a>>;
+impl Eval for Arg<'_> {
+    type Output<'a>
+        = Option<CowValue<'a>>
+    where Self: 'a;
 
-    fn eval(self, ctx: &'a Context, topic: Option<CowValue<'a>>) -> Result<Option<CowValue<'a>>> {
+    fn eval<'a>(
+        &'a self,
+        ctx: &'a Context,
+        topic: Option<CowValue<'a>>,
+    ) -> Result<Option<CowValue<'a>>> {
         assert_no_topic(&topic, &self)?;
 
         match self {

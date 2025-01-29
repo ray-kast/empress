@@ -1,5 +1,5 @@
 use std::{
-    borrow::Cow,
+    borrow::{Borrow, Cow},
     fmt::{self, Debug, Write},
 };
 
@@ -91,36 +91,41 @@ impl Debug for Context {
     }
 }
 
-pub trait Eval<'a> {
-    type Output: 'a;
+pub trait Eval {
+    type Output<'a>
+    where Self: 'a;
 
-    fn eval(self, ctx: &'a Context, topic: Option<CowValue<'a>>) -> Result<Self::Output>;
+    fn eval<'a>(
+        &'a self,
+        ctx: &'a Context,
+        topic: Option<CowValue<'a>>,
+    ) -> Result<Self::Output<'a>>;
 }
 
-pub trait StreamString<'a>: Stream<'a> {
-    fn stream_string(self, ctx: Self::Context) -> Result<String, Self::Error>;
+pub trait StreamString: Stream {
+    fn stream_string(&self, ctx: Self::Context<'_>) -> Result<String, Self::Error>;
 }
 
-impl<'a, T: Stream<'a>> StreamString<'a> for T {
-    fn stream_string(self, ctx: Self::Context) -> Result<String, Self::Error> {
+impl<T: Stream> StreamString for T {
+    fn stream_string(&self, ctx: Self::Context<'_>) -> Result<String, Self::Error> {
         let mut s = String::new();
         self.stream(ctx, &mut s)?;
         Ok(s)
     }
 }
 
-pub trait Stream<'a> {
-    type Context: 'a;
+pub trait Stream {
+    type Context<'a>: Copy;
     type Error: From<StreamError>;
 
-    fn stream(self, ctx: Self::Context, out: impl Write) -> Result<(), Self::Error>;
+    fn stream<W: Write>(&self, ctx: Self::Context<'_>, out: W) -> Result<(), Self::Error>;
 }
 
-impl Stream<'static> for &Value {
-    type Context = ();
+impl Stream for Value {
+    type Context<'a> = ();
     type Error = StreamError;
 
-    fn stream(self, (): (), mut out: impl Write) -> Result<(), StreamError> {
+    fn stream<W: Write>(&self, (): (), mut out: W) -> Result<(), StreamError> {
         match self {
             Value::Null => Ok(()),
             Value::Number(n) => out.write_fmt(format_args!("{n}")).map_err(Into::into),
@@ -132,21 +137,19 @@ impl Stream<'static> for &Value {
     }
 }
 
-pub trait StreamAll<'a>: IntoIterator {
-    type Context: 'a;
+pub trait StreamAll: IntoIterator {
+    type Context<'a>;
     type Error: From<StreamError>;
 
-    fn stream_all(self, ctx: Self::Context, out: impl Write) -> Result<(), Self::Error>;
+    fn stream_all<W: Write>(self, ctx: Self::Context<'_>, out: W) -> Result<(), Self::Error>;
 }
 
-impl<'a, T: Stream<'a>, I: IntoIterator<Item = T>> StreamAll<'a> for I
-where T::Context: Clone
-{
-    type Context = T::Context;
+impl<'b, T: Stream + 'b, I: IntoIterator<Item = &'b T>> StreamAll for I {
+    type Context<'a> = T::Context<'a>;
     type Error = T::Error;
 
-    fn stream_all(self, ctx: T::Context, mut out: impl Write) -> Result<(), T::Error> {
+    fn stream_all<W: Write>(self, ctx: T::Context<'_>, mut out: W) -> Result<(), T::Error> {
         self.into_iter()
-            .try_for_each(|s| s.stream(ctx.clone(), &mut out))
+            .try_for_each(|s| s.borrow().stream(ctx, &mut out))
     }
 }

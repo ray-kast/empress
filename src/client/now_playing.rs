@@ -217,7 +217,8 @@ pub async fn run(
     zero: bool,
 ) -> Result {
     let player = player.into();
-    let mut fmt = Formatter::new(format, watch.then_some(zero))?;
+    let fmt = FormatData::prepare(&format)?;
+    let mut fmt = Formatter::new(&fmt, watch.then_some(zero))?;
 
     let status = super::try_send(&proxy, |p| async {
         if player == server::PlayerOpts::default() {
@@ -286,7 +287,7 @@ async fn watch_tick(status: &NowPlaying) -> Option<WatchEvent<'static>> {
 async fn run_watch(
     proxy: Timeout<EmpressProxy<'_>>,
     player: server::PlayerOpts,
-    mut fmt: Formatter,
+    mut fmt: Formatter<'_>,
     mut status: NowPlaying,
 ) -> Result<()> {
     let mut position = status.capture_position();
@@ -346,40 +347,55 @@ async fn run_watch(
     }
 }
 
-enum FormatterType {
+enum FormatData<'a> {
     Json,
-    Pretty(Cow<'static, str>),
+    Pretty(Cow<'a, str>),
 }
 
-struct Formatter {
-    ty: FormatterType,
+impl<'a> FormatData<'a> {
+    fn prepare(format: &'a NowPlayingFormat) -> Result<Self> {
+        Ok(match (format.kind, &format.string, &format.file) {
+            (k, None, None) => match k.unwrap_or(FormatKind::Json) {
+                FormatKind::Json => Self::Json,
+                FormatKind::Pretty => Self::Pretty(FORMAT_PRETTY.into()),
+            },
+            (None, Some(s), None) => Self::Pretty(s.into()),
+            (None, None, Some(p)) => {
+                let mut s = fs::read_to_string(p)
+                    .with_context(|| format!("Error reading format from {p:?}"))?;
+
+                if let Some(t) = s.strip_suffix('\n') {
+                    s.truncate(t.len());
+                }
+
+                Self::Pretty(s.into())
+            },
+            _ => unreachable!(),
+        })
+    }
+}
+
+enum FormatterType<'a> {
+    Json,
+    Pretty(format::Formatter<'a>),
+}
+
+struct Formatter<'a> {
+    ty: FormatterType<'a>,
     watch_sep: Option<char>,
     last: Option<String>,
 }
 
 const FORMAT_PRETTY: &str = "{{ status | sym }} {{ artists |! join(', ') ?? 'Unknown' }} — {{ \
-                             title }} {{ position |! time ?? '-:--' }}/{{ length |! time }}";
+                             title ?? 'No Title' }} {{ position |! time ?? '-:--' }}/{{ length |! \
+                             time }}";
 
-impl Formatter {
-    fn new(format: NowPlayingFormat, watch_zero: Option<bool>) -> Result<Self> {
+impl<'a> Formatter<'a> {
+    fn new(data: &'a FormatData, watch_zero: Option<bool>) -> Result<Self> {
         Ok(Self {
-            ty: match (format.kind, format.string, format.file) {
-                (k, None, None) => match k.unwrap_or(FormatKind::Json) {
-                    FormatKind::Json => FormatterType::Json,
-                    FormatKind::Pretty => FormatterType::Pretty(FORMAT_PRETTY.into()),
-                },
-                (None, Some(s), None) => FormatterType::Pretty(s.into()),
-                (None, None, Some(p)) => {
-                    let mut s = fs::read_to_string(&p)
-                        .with_context(|| format!("Error reading format from {p:?}"))?;
-
-                    if let Some(t) = s.strip_suffix('\n') {
-                        s.truncate(t.len());
-                    }
-
-                    FormatterType::Pretty(s.into())
-                },
-                _ => unreachable!(),
+            ty: match data {
+                FormatData::Json => FormatterType::Json,
+                FormatData::Pretty(s) => FormatterType::Pretty(format::Formatter::compile(s)?),
             },
             watch_sep: watch_zero.map(|z| if z { '\0' } else { '\n' }),
             last: None,
@@ -389,7 +405,7 @@ impl Formatter {
     fn print(&mut self, status: &NowPlaying) -> Result {
         let mut s: String = match self.ty {
             FormatterType::Json => serde_json::to_string(status)?,
-            FormatterType::Pretty(ref s) => format::eval(s, status)?,
+            FormatterType::Pretty(ref f) => f.run(status)?,
         };
 
         if let Some(c) = self.watch_sep {
