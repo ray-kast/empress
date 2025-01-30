@@ -41,22 +41,34 @@ impl From<ParseError<lexer::Token<'_>>> for Error {
     fn from(e: ParseError<lexer::Token>) -> Self { Self::Parse(e.map_token(|t| format!("{t:?}"))) }
 }
 
-pub struct Formatter<'a>(Vec<ast::Segment<'a>>);
+pub struct Formatter<'a>(FormatterState<'a>);
+
+enum FormatterState<'a> {
+    Basic(ast::Format<'a>),
+    Extended(ast::FormatExtended<'a>),
+}
 
 impl<'a> Formatter<'a> {
-    pub fn compile<S: AsRef<str> + ?Sized + 'a>(fmt: &'a S) -> Result<Self, Error> {
-        let toks = lexer::scan(fmt.as_ref());
-        log::trace!("{toks:?}");
+    pub fn compile<S: AsRef<str> + ?Sized + 'a>(fmt: &'a S, extended: bool) -> Result<Self, Error> {
+        if extended {
+            let toks = lexer::scan_extended(fmt.as_ref());
+            log::trace!("Extended format string: {toks:?}");
 
-        let ast = parser::FormatParser::new().parse(toks?);
-        log::trace!("{ast:?}");
+            let ast = parser::FormatExtendedParser::new().parse(toks?);
+            log::trace!("{ast:?}");
 
-        Ok(Self(ast?))
+            Ok(Self(FormatterState::Extended(ast?)))
+        } else {
+            let toks = lexer::scan(fmt.as_ref());
+            log::trace!("Format string: {toks:?}");
+
+            let ast = parser::FormatParser::new().parse(toks?);
+            log::trace!("{ast:?}");
+            Ok(Self(FormatterState::Basic(ast?)))
+        }
     }
 
     pub fn run<V: serde::Serialize>(&self, values: V) -> Result<String, Error> {
-        use interp::StreamAll;
-
         let values = match serde_json::to_value(values) {
             Ok(serde_json::Value::Object(m)) => Ok(m),
             Ok(v) => Err(Error::Values(anyhow::anyhow!(
@@ -66,13 +78,14 @@ impl<'a> Formatter<'a> {
         }?;
 
         let mut out = String::new();
-        self.0.as_slice().stream_all(
-            &interp::Context {
-                values,
-                functions: functions::all(),
-            },
-            &mut out,
-        )?;
+        let ctx = interp::Context {
+            values,
+            functions: functions::all(),
+        };
+        match &self.0 {
+            FormatterState::Basic(s) => s.eval_print(&ctx, &mut out),
+            FormatterState::Extended(c) => c.eval_print(&ctx, &mut out),
+        }?;
 
         Ok(out)
     }

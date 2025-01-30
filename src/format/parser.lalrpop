@@ -1,3 +1,5 @@
+use std::borrow::Cow;
+
 use serde_json::Number;
 
 use super::super::{ast, lexer};
@@ -8,8 +10,17 @@ extern {
   type Location = lexer::Pos;
 
   enum lexer::Token<'i> {
-    Fragment => lexer::Token::Fragment(<&'i str>),
+    Fragment => lexer::Token::Fragment(<Cow<'i, str>>),
     "}}" => lexer::Token::BlockEnd,
+
+    "elif" => lexer::Token::KwElif,
+    "else" => lexer::Token::KwElse,
+    "end" => lexer::Token::KwEnd,
+    "false" => lexer::Token::KwFalse,
+    "if" => lexer::Token::KwIf,
+    "let" => lexer::Token::KwLet,
+    "put" => lexer::Token::KwPut,
+    "true" => lexer::Token::KwTrue,
 
     "." => lexer::Token::Dot,
     "!" => lexer::Token::Bang,
@@ -21,13 +32,27 @@ extern {
     ")" => lexer::Token::RParen,
     "[" => lexer::Token::LBrack,
     "]" => lexer::Token::RBrack,
+
+    "||" => lexer::Token::Or,
+    "&&" => lexer::Token::And,
+    "==" => lexer::Token::Eq,
+    "!=" => lexer::Token::Neq,
+    "<" => lexer::Token::Lt,
+    ">" => lexer::Token::Gt,
+    "<=" => lexer::Token::Le,
+    ">=" => lexer::Token::Ge,
+
+    "$" => lexer::Token::Dollar,
+    ":=" => lexer::Token::Declare,
+
     Ident => lexer::Token::Ident(<&'i str>),
     Number => lexer::Token::Number(<Number>),
     String => lexer::Token::String(<String>),
   }
 }
 
-pub Format = <Segment*>;
+pub Format: ast::Format<'i> = <Segment*> => ast::Format(<>);
+pub FormatExtended: ast::FormatExtended<'i> = <Command*> => ast::FormatExtended(<>);
 
 Segment: ast::Segment<'i> = {
   Fragment => ast::Segment::Fragment(<>),
@@ -36,29 +61,76 @@ Segment: ast::Segment<'i> = {
 
 Block = <Expr?> "}}";
 
+Command: ast::Command<'i> = {
+  <If> => ast::Command::If(<>),
+  <Let> => ast::Command::Let(<>),
+  "put" <l:(<Expr> ",")*> <r:Expr> => ast::Command::Put(l, r),
+};
+
+If: ast::If<'i> = <i:IfGuard> <l:ElifGuard*> <e:Else?> Endif => ast::If(i, l, e);
+IfGuard: ast::Guard<'i> = <c:IfPream> <t:Command*> => ast::Guard(c, t);
+ElifGuard: ast::Guard<'i> = <c:ElifPream> <t:Command*> => ast::Guard(c, t);
+Else = ElsePream <Command*>;
+
+IfPream = "if" <Expr>;
+ElifPream = "elif" <Expr>;
+ElsePream = "else";
+Endif = "end";
+
+Let: ast::Let<'i> = "let" <i:Ident> ":=" <e:Expr> => ast::Let(i, e);
+
 Expr: ast::Expr<'i> = {
   NullChain => ast::Expr(Box::new(<>)),
 };
 
 NullChain: ast::NullChain<'i> = {
   <l:NullChain> "??" <r:NullPipeline> => ast::NullChain::Chain(Box::new(l), r),
-  NullPipeline => ast::NullChain::Bang(<>),
+  NullPipeline => ast::NullChain::Next(<>),
 };
 
 NullPipeline: ast::NullPipeline<'i> = {
   <l:NullPipeline> "|!" <r:Pipeline> => ast::NullPipeline::Bang(Box::new(l), r),
-  Pipeline => ast::NullPipeline::Pipe(<>),
+  Pipeline => ast::NullPipeline::Next(<>),
 };
 
 Pipeline: ast::Pipeline<'i> = {
-  <l:Pipeline> "|" <r:Member> => ast::Pipeline::Pipe(Box::new(l), r),
-  Member => ast::Pipeline::Member(<>),
+  <l:Pipeline> "|" <r:Binop> => ast::Pipeline::Pipe(Box::new(l), r),
+  Binop => ast::Pipeline::Next(<>),
 };
+
+Binop = Or;
+
+Or: ast::Or<'i> = {
+  <l:And> "||" <r:Or> => ast::Or::Or(l, Box::new(r)),
+  And => ast::Or::Next(<>),
+};
+
+And: ast::And<'i> = {
+  <l:Compare> "&&" <r:And> => ast::And::And(l, Box::new(r)),
+  Compare => ast::And::Next(<>),
+};
+
+Compare: ast::Compare<'i> = {
+  <l:Unop> "==" <r:Unop> => ast::Compare::Eq(l, r),
+  <l:Unop> "!=" <r:Unop> => ast::Compare::Neq(l, r),
+  <l:Unop> "<" <r:Unop> => ast::Compare::Lt(l, r),
+  <l:Unop> ">" <r:Unop> => ast::Compare::Gt(l, r),
+  <l:Unop> "<=" <r:Unop> => ast::Compare::Le(l, r),
+  <l:Unop> ">=" <r:Unop> => ast::Compare::Ge(l, r),
+  Unop => ast::Compare::Next(<>),
+};
+
+Unop: ast::Unop<'i> = {
+  "!" <Unop> => ast::Unop::Not(Box::new(<>)),
+  Value => ast::Unop::Next(<>),
+};
+
+Value = Member;
 
 Member: ast::Member<'i> = {
   <l:Member> "." <r:Ident> => ast::Member::Dot(Box::new(l), r),
   <l:Member> "[" <r:Expr> "]" => ast::Member::Index(Box::new(l), r),
-  Prim => ast::Member::Prim(<>),
+  Prim => ast::Member::Next(<>),
 };
 
 Prim: ast::Prim<'i> = {
@@ -67,15 +139,14 @@ Prim: ast::Prim<'i> = {
   "." "[" <Expr> "]" => ast::Prim::LensIndex(<>),
   <Ident> "(" <Args?> ")" => ast::Prim::Call(<>),
   "[" <Args?> "]" => ast::Prim::Array(<>),
+  "true" => ast::Prim::Value(true.into()),
+  "false" => ast::Prim::Value(false.into()),
   Ident => ast::Prim::Ident(<>),
   Number => ast::Prim::Value(<>.into()),
   String => ast::Prim::Value(<>.into()),
 };
 
-Args: ast::Args<'i> = {
-  <l:Args> "," <r:Arg> => ast::Args::Comma(Box::new(l), r),
-  Arg => ast::Args::Arg(<>),
-};
+Args: ast::Args<'i> = <l:(<Arg> ",")*> <r:Arg> => ast::Args(l, r);
 
 Arg: ast::Arg<'i> = {
   <Expr> "!" => ast::Arg::Coerce(<>),

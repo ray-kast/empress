@@ -81,7 +81,7 @@ shorten(len, val): When any printable value is piped in, returns a string no mor
 
 shortenMid(len, val): When any printable value is piped in, returns a string no more than `len` characters long.  If the string has been shortened its middle will be replaced with `val`.
 
-sym(): Converts several special strings to Unicode symbols.  Currently if the {{ status }} field is piped into this function it will be converted to the appropriate play/pause/stop symbol.
+symbol(): Converts several special strings to Unicode symbols.  Currently if the {{ status }} field is piped into this function it will be converted to the appropriate play/pause/stop symbol.
 
 time(): When a number of microseconds is passed in, converts it to human-readable time in h:mm:ss format.
 

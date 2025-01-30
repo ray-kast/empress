@@ -218,7 +218,7 @@ pub async fn run(
 ) -> Result {
     let player = player.into();
     let fmt = FormatData::prepare(&format)?;
-    let mut fmt = Formatter::new(&fmt, watch.then_some(zero))?;
+    let mut fmt = Formatter::new(&fmt, format.extended, watch.then_some(zero))?;
 
     let status = super::try_send(&proxy, |p| async {
         if player == server::PlayerOpts::default() {
@@ -386,16 +386,18 @@ struct Formatter<'a> {
     last: Option<String>,
 }
 
-const FORMAT_PRETTY: &str = "{{ status | sym }} {{ artists |! join(', ') ?? 'Unknown' }} — {{ \
+const FORMAT_PRETTY: &str = "{{ status | symbol }} {{ artists |! join(', ') ?? 'Unknown' }} — {{ \
                              title ?? 'No Title' }} {{ position |! time ?? '-:--' }}/{{ length |! \
                              time }}";
 
 impl<'a> Formatter<'a> {
-    fn new(data: &'a FormatData, watch_zero: Option<bool>) -> Result<Self> {
+    fn new(data: &'a FormatData, extended: bool, watch_zero: Option<bool>) -> Result<Self> {
         Ok(Self {
             ty: match data {
                 FormatData::Json => FormatterType::Json,
-                FormatData::Pretty(s) => FormatterType::Pretty(format::Formatter::compile(s)?),
+                FormatData::Pretty(s) => {
+                    FormatterType::Pretty(format::Formatter::compile(s, extended)?)
+                },
             },
             watch_sep: watch_zero.map(|z| if z { '\0' } else { '\n' }),
             last: None,

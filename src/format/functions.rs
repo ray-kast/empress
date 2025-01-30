@@ -9,8 +9,8 @@ use anyhow::Context;
 use regex::Regex;
 
 use super::{
-    ffi::{Any, Array, Error, Function, Input, Number, Output, Result, Topic},
-    interp::{is_null_like, Stream, StreamString, Value},
+    ffi::{Any, Array, Error, Function, Input, NoTopic, Number, Output, Result, Topic},
+    interp::{is_null_like, stringify, write_value, Value},
 };
 use crate::server::mpris::player::PlaybackStatus;
 
@@ -18,14 +18,15 @@ pub type Functions = HashMap<&'static str, Function>;
 
 pub fn all() -> Functions {
     vec![
-        ("compact", compact as Function),
+        ("blank", blank as Function),
+        ("compact", compact),
         ("eta", eta),
         ("join", join),
         ("json", json),
         ("lower", lower),
         ("shorten", shorten),
         ("shortenMid", shorten_mid),
-        ("sym", sym),
+        ("symbol", symbol),
         ("time", time),
         ("trim", trim),
         ("upper", upper),
@@ -36,6 +37,19 @@ pub fn all() -> Functions {
 }
 
 //////// Helper functions
+
+fn is_blank(value: &Value) -> bool {
+    match value {
+        Value::Null => true,
+        Value::Bool(_) => false,
+        Value::Number(n) => {
+            n.as_i128().is_some_and(|i| i == 0) || n.as_f64().is_some_and(|f| f.abs() < 1e5)
+        },
+        Value::String(s) => s.trim_start().is_empty(),
+        Value::Array(a) => a.iter().all(is_blank),
+        Value::Object(o) => o.is_empty(),
+    }
+}
 
 fn ydhmss_micros(mut micros: i64, neg_zero: bool) -> String {
     let mut s = String::new();
@@ -72,7 +86,7 @@ fn ydhmss_micros(mut micros: i64, neg_zero: bool) -> String {
 fn stream_str(inp: Input, f: impl FnOnce(String) -> String) -> Output {
     let (_ctx, Topic(Any(v)), ()) = inp.try_into()?;
 
-    Ok(Owned(Value::String(f(v.stream_string(())?))))
+    Ok(Owned(Value::String(f(stringify(v)?))))
 }
 
 struct ShortenLen {
@@ -108,6 +122,12 @@ fn shorten_len(s: &str, ellipsis: &str, max_len: usize) -> Result<Option<Shorten
 
 //////// Format function definitions
 
+fn blank(inp: Input) -> Output {
+    let (_ctx, NoTopic, (Any(val), ())) = inp.try_into()?;
+
+    Ok(Owned(Value::Bool(is_blank(val.as_ref()))))
+}
+
 fn compact(inp: Input) -> Output {
     let (_ctx, Topic(Array(arr)), ()) = inp.try_into()?;
 
@@ -130,10 +150,10 @@ fn join(inp: Input) -> Output {
 
     for (i, el) in arr.iter().enumerate() {
         if i > 0 {
-            sep.stream((), &mut s)?;
+            write_value(sep.as_ref(), &mut s)?;
         }
 
-        el.stream((), &mut s)?;
+        write_value(el, &mut s)?;
     }
 
     Ok(Owned(Value::String(s)))
@@ -152,8 +172,8 @@ fn lower(inp: Input) -> Output { stream_str(inp, |s| s.to_lowercase()) }
 fn shorten(inp: Input) -> Output {
     let (_ctx, Topic(Any(val)), (Number::<usize>(len), (Any(ell), ()))) = inp.try_into()?;
 
-    let val = val.stream_string(())?;
-    let ell = ell.stream_string(())?;
+    let val = stringify(val)?;
+    let ell = stringify(ell)?;
     let len = shorten_len(&val, &ell, len)?;
 
     Ok(Owned(Value::String(match len {
@@ -177,8 +197,8 @@ fn shorten(inp: Input) -> Output {
 fn shorten_mid(inp: Input) -> Output {
     let (_ctx, Topic(Any(val)), (Number::<usize>(len), (Any(ell), ()))) = inp.try_into()?;
 
-    let val = val.stream_string(())?;
-    let ell = ell.stream_string(())?;
+    let val = stringify(val)?;
+    let ell = stringify(ell)?;
     let len = shorten_len(&val, &ell, len)?;
 
     Ok(Owned(Value::String(match len {
@@ -216,7 +236,7 @@ fn shorten_mid(inp: Input) -> Output {
     })))
 }
 
-fn sym(inp: Input) -> Output {
+fn symbol(inp: Input) -> Output {
     stream_str(inp, |s| match s.parse() {
         Ok(PlaybackStatus::Playing) => "▶".into(),
         Ok(PlaybackStatus::Paused) => "⏸".into(),

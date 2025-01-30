@@ -1,6 +1,7 @@
 use std::{
     borrow::{Borrow, Cow},
-    fmt::{self, Debug, Write},
+    collections::HashMap,
+    fmt::{self, Debug},
 };
 
 use serde_json::Map;
@@ -52,6 +53,12 @@ pub enum Error {
     ExtraTopic(String),
     #[error("Error executing function {0:?}")]
     Ffi(String, #[source] ffi::Error),
+    #[error("Variable name {0:?} already exists")]
+    Shadow(String),
+    #[error("Value {} must be a boolean", json(.0))]
+    BadCondition(Value),
+    #[error("Values {} and {} cannot be compared", json(.0), json(.1))]
+    BadCompare(Value, Value),
     #[error("Value {val} has no field {1:?}", val = json(.0))]
     BadPath(Value, String),
     #[error("Value {} has no index {}", json(.0), json(.1))]
@@ -78,6 +85,11 @@ pub type Result<T, E = Error> = std::result::Result<T, E>;
 pub use serde_json::Value;
 pub type CowValue<'a> = Cow<'a, Value>;
 
+#[derive(Default)]
+pub struct State<'a> {
+    pub locals: HashMap<&'a str, CowValue<'a>>,
+}
+
 pub struct Context {
     pub values: Map<String, Value>,
     pub functions: Functions,
@@ -91,6 +103,18 @@ impl Debug for Context {
     }
 }
 
+pub trait EvalMut {
+    type Output<'a>
+    where Self: 'a;
+
+    fn eval_mut<'a>(
+        &'a self,
+        ctx: &'a Context,
+        state: &mut State<'a>,
+        topic: Option<CowValue<'a>>,
+    ) -> Result<Self::Output<'a>>;
+}
+
 pub trait Eval {
     type Output<'a>
     where Self: 'a;
@@ -98,58 +122,43 @@ pub trait Eval {
     fn eval<'a>(
         &'a self,
         ctx: &'a Context,
+        state: &State<'a>,
         topic: Option<CowValue<'a>>,
     ) -> Result<Self::Output<'a>>;
 }
 
-pub trait StreamString: Stream {
-    fn stream_string(&self, ctx: Self::Context<'_>) -> Result<String, Self::Error>;
-}
+impl<T: Eval> EvalMut for T {
+    type Output<'a>
+        = <T as Eval>::Output<'a>
+    where Self: 'a;
 
-impl<T: Stream> StreamString for T {
-    fn stream_string(&self, ctx: Self::Context<'_>) -> Result<String, Self::Error> {
-        let mut s = String::new();
-        self.stream(ctx, &mut s)?;
-        Ok(s)
+    #[inline]
+    fn eval_mut<'a>(
+        &'a self,
+        ctx: &'a Context,
+        state: &mut State<'a>,
+        topic: Option<CowValue<'a>>,
+    ) -> Result<Self::Output<'a>> {
+        self.eval(ctx, state, topic)
     }
 }
 
-pub trait Stream {
-    type Context<'a>: Copy;
-    type Error: From<StreamError>;
-
-    fn stream<W: Write>(&self, ctx: Self::Context<'_>, out: W) -> Result<(), Self::Error>;
-}
-
-impl Stream for Value {
-    type Context<'a> = ();
-    type Error = StreamError;
-
-    fn stream<W: Write>(&self, (): (), mut out: W) -> Result<(), StreamError> {
-        match self {
-            Value::Null => Ok(()),
-            Value::Number(n) => out.write_fmt(format_args!("{n}")).map_err(Into::into),
-            Value::String(s) => out.write_str(s).map_err(Into::into),
-            Value::Bool(_) | Value::Array(_) | Value::Object(_) => {
-                Err(StreamError::Unprintable(self.clone()))
-            },
-        }
+pub fn write_value<V: Borrow<Value>, W: fmt::Write>(
+    value: V,
+    mut out: W,
+) -> Result<(), StreamError> {
+    let value = value.borrow();
+    match value {
+        Value::Null => Ok(()),
+        Value::Number(n) => out.write_fmt(format_args!("{n}")).map_err(Into::into),
+        Value::String(s) => out.write_str(s).map_err(Into::into),
+        Value::Bool(_) | Value::Array(_) | Value::Object(_) => {
+            Err(StreamError::Unprintable(value.clone()))
+        },
     }
 }
 
-pub trait StreamAll: IntoIterator {
-    type Context<'a>;
-    type Error: From<StreamError>;
-
-    fn stream_all<W: Write>(self, ctx: Self::Context<'_>, out: W) -> Result<(), Self::Error>;
-}
-
-impl<'b, T: Stream + 'b, I: IntoIterator<Item = &'b T>> StreamAll for I {
-    type Context<'a> = T::Context<'a>;
-    type Error = T::Error;
-
-    fn stream_all<W: Write>(self, ctx: T::Context<'_>, mut out: W) -> Result<(), T::Error> {
-        self.into_iter()
-            .try_for_each(|s| s.borrow().stream(ctx, &mut out))
-    }
+pub fn stringify<V: Borrow<Value>>(value: V) -> Result<String, StreamError> {
+    let mut s = String::new();
+    write_value(value, &mut s).map(|()| s)
 }

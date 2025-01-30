@@ -163,6 +163,11 @@ struct NowPlayingFormat {
     )]
     file: Option<PathBuf>,
 
+    /// Use the extended format string syntax when parsing the given format
+    /// string
+    #[arg(short = 'e', long = "extended", conflicts_with("kind"))]
+    extended: bool,
+
     /// Specify the type of the output (e.g. JSON) - cannot be used with
     /// explicitly-specified format strings
     #[arg(
