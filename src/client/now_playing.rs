@@ -218,7 +218,7 @@ pub async fn run(
 ) -> Result {
     let player = player.into();
     let fmt = FormatData::prepare(&format)?;
-    let mut fmt = Formatter::new(&fmt, format.extended, watch.then_some(zero))?;
+    let mut fmt = Formatter::new(&fmt, watch.then_some(zero))?;
 
     let status = super::try_send(&proxy, |p| async {
         if player == server::PlayerOpts::default() {
@@ -347,19 +347,42 @@ async fn run_watch(
     }
 }
 
+#[rustfmt::skip]
+const FORMAT_PRETTY: &str = "\
+    if status == 'Stopped' \
+        put 'not playing'\
+    else \
+        put status | symbol, ' '\
+\
+        if blank([title, artists, album])\
+            put player.id \
+        else \
+            if !blank(artists)\
+                put artists | compact | join(', ') ?? 'Unknown', ' \\u{2014} '\
+            end \
+\
+            put title ?? 'No Title'\
+            if !blank(album) put ' (', album, ')' end \
+        end \
+\
+        let ts := [position |! time, length |! time] | compact | join('/')\
+        if !blank(ts) put ' [', ts, ']' end \
+    end\
+";
+
 enum FormatData<'a> {
     Json,
-    Pretty(Cow<'a, str>),
+    Pretty(Cow<'a, str>, bool),
 }
 
 impl<'a> FormatData<'a> {
     fn prepare(format: &'a NowPlayingFormat) -> Result<Self> {
         Ok(match (format.kind, &format.string, &format.file) {
-            (k, None, None) => match k.unwrap_or(FormatKind::Json) {
+            (k, None, None) => match k.unwrap_or(FormatKind::Pretty) {
                 FormatKind::Json => Self::Json,
-                FormatKind::Pretty => Self::Pretty(FORMAT_PRETTY.into()),
+                FormatKind::Pretty => Self::Pretty(FORMAT_PRETTY.into(), true),
             },
-            (None, Some(s), None) => Self::Pretty(s.into()),
+            (None, Some(s), None) => Self::Pretty(s.into(), format.extended),
             (None, None, Some(p)) => {
                 let mut s = fs::read_to_string(p)
                     .with_context(|| format!("Error reading format from {p:?}"))?;
@@ -368,7 +391,7 @@ impl<'a> FormatData<'a> {
                     s.truncate(t.len());
                 }
 
-                Self::Pretty(s.into())
+                Self::Pretty(s.into(), format.extended)
             },
             _ => unreachable!(),
         })
@@ -386,17 +409,13 @@ struct Formatter<'a> {
     last: Option<String>,
 }
 
-const FORMAT_PRETTY: &str = "{{ status | symbol }} {{ artists |! join(', ') ?? 'Unknown' }} — {{ \
-                             title ?? 'No Title' }} {{ position |! time ?? '-:--' }}/{{ length |! \
-                             time }}";
-
 impl<'a> Formatter<'a> {
-    fn new(data: &'a FormatData, extended: bool, watch_zero: Option<bool>) -> Result<Self> {
+    fn new(data: &'a FormatData, watch_zero: Option<bool>) -> Result<Self> {
         Ok(Self {
             ty: match data {
                 FormatData::Json => FormatterType::Json,
-                FormatData::Pretty(s) => {
-                    FormatterType::Pretty(format::Formatter::compile(s, extended)?)
+                FormatData::Pretty(s, e) => {
+                    FormatterType::Pretty(format::Formatter::compile(s, *e)?)
                 },
             },
             watch_sep: watch_zero.map(|z| if z { '\0' } else { '\n' }),
