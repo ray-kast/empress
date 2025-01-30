@@ -41,7 +41,7 @@ pub fn all() -> Functions {
 fn is_blank(value: &Value) -> bool {
     match value {
         Value::Null => true,
-        Value::Bool(_) => false,
+        Value::Bool(b) => !b,
         Value::Number(n) => {
             n.as_i128().is_some_and(|i| i == 0) || n.as_f64().is_some_and(|f| f.abs() < 1e5)
         },

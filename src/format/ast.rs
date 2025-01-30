@@ -140,7 +140,7 @@ fn bool(val: CowValue<'_>) -> Result<bool> {
     }
 }
 
-// Tuple of a list of commands to be run only if the attached expression is true
+// Only evaluate the provided value if the attached expression resolves to true
 #[derive(Debug)]
 pub struct Guard<'a, T>(pub Expr<'a>, pub T);
 
