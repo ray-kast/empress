@@ -56,21 +56,22 @@ pub FormatExtended: ast::FormatExtended<'i> = <Command*> => ast::FormatExtended(
 
 Segment: ast::Segment<'i> = {
   Fragment => ast::Segment::Fragment(<>),
-  Block => ast::Segment::Block(<>),
+  "}}" => ast::Segment::Blank,
+  <If<("}}" <Segment*>)>> => ast::Segment::If(<>),
+  <Let> "}}" => ast::Segment::Let(<>),
+  <Expr> "}}" => ast::Segment::Expr(<>),
 };
 
-Block = <Expr?> "}}";
-
 Command: ast::Command<'i> = {
-  <If> => ast::Command::If(<>),
+  <If<Command*>> => ast::Command::If(<>),
   <Let> => ast::Command::Let(<>),
   "put" <l:(<Expr> ",")*> <r:Expr> => ast::Command::Put(l, r),
 };
 
-If: ast::If<'i> = <i:IfGuard> <l:ElifGuard*> <e:Else?> Endif => ast::If(i, l, e);
-IfGuard: ast::Guard<'i> = <c:IfPream> <t:Command*> => ast::Guard(c, t);
-ElifGuard: ast::Guard<'i> = <c:ElifPream> <t:Command*> => ast::Guard(c, t);
-Else = ElsePream <Command*>;
+If<T>: ast::If<'i, T> = <i:IfGuard<T>> <l:ElifGuard<T>*> <e:Else<T>?> Endif => ast::If(i, l, e);
+IfGuard<T>: ast::Guard<'i, T> = <c:IfPream> <t:T> => ast::Guard(c, t);
+ElifGuard<T>: ast::Guard<'i, T> = <c:ElifPream> <t:T> => ast::Guard(c, t);
+Else<T> = ElsePream <T>;
 
 IfPream = "if" <Expr>;
 ElifPream = "elif" <Expr>;

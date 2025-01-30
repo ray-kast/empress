@@ -1,13 +1,14 @@
 use std::{
     borrow::Cow::{self, Borrowed, Owned},
-    cmp, fmt,
+    cmp,
+    fmt::{self, Write},
 };
 
 use super::{
     ffi,
     interp::{
-        assert_no_topic, assert_topic, is_null_like, write_value, Context, CowValue, Error, Eval,
-        EvalMut, Result, State, Value,
+        assert_no_topic, assert_topic, is_null_like, Context, CowValue, Error, Eval, EvalMut,
+        Result, State, Value,
     },
 };
 
@@ -16,17 +17,9 @@ use super::{
 pub struct Format<'a>(pub Vec<Segment<'a>>);
 
 impl Format<'_> {
-    pub fn eval_print<W: fmt::Write>(&self, ctx: &Context, mut out: W) -> Result<()> {
-        let state = State::default();
-        for seg in &self.0 {
-            match seg {
-                Segment::Fragment(s) => out.write_str(s)?,
-                Segment::Block(None) => (),
-                Segment::Block(Some(e)) => write_value(e.eval(&ctx, &state, None)?, &mut out)?,
-            }
-        }
-
-        Ok(())
+    pub fn eval<W: fmt::Write>(&self, ctx: &Context, out: W) -> Result<()> {
+        let mut state = State::new(out);
+        self.0.eval_mut(ctx, &mut state, None)
     }
 }
 
@@ -35,85 +28,73 @@ impl Format<'_> {
 pub struct FormatExtended<'a>(pub Vec<Command<'a>>);
 
 impl FormatExtended<'_> {
-    pub fn eval_print<W: fmt::Write>(&self, ctx: &Context, mut out: W) -> Result<()> {
-        let mut state = State::default();
-        for cmd in &self.0 {
-            for val in cmd.eval_mut(ctx, &mut state, None)? {
-                write_value(val, &mut out)?;
-            }
-        }
-
-        Ok(())
+    pub fn eval<W: fmt::Write>(&self, ctx: &Context, out: W) -> Result<()> {
+        let mut state = State::new(out);
+        self.0.eval_mut(ctx, &mut state, None)
     }
 }
 
 #[derive(Debug)]
 pub enum Segment<'a> {
     Fragment(Cow<'a, str>),
-    Block(Option<Expr<'a>>),
+    Blank,
+    If(If<'a, Vec<Segment<'a>>>),
+    Let(Let<'a>),
+    Expr(Expr<'a>),
 }
 
-impl EvalMut for Vec<Command<'_>> {
-    type Output<'a>
-        = Vec<CowValue<'a>>
-    where Self: 'a;
+impl<'a> EvalMut<'a> for Segment<'_> {
+    type Output = ();
 
-    fn eval_mut<'a>(
+    fn eval_mut<W: fmt::Write>(
         &'a self,
         ctx: &'a Context,
-        state: &mut State<'a>,
+        state: &mut State<'a, W>,
         topic: Option<CowValue<'a>>,
-    ) -> Result<Self::Output<'a>> {
-        let mut it = self.iter();
-        let Some(fst) = it.next() else {
-            return Ok(vec![]);
-        };
-        let mut out = fst.eval_mut(ctx, state, topic.clone())?;
+    ) -> Result<Self::Output> {
+        assert_no_topic(&topic, self)?;
 
-        for expr in it {
-            out.extend(expr.eval_mut(ctx, state, topic.clone())?);
+        match self {
+            Segment::Fragment(s) => state.out_mut().write_str(s).map_err(Into::into),
+            Segment::Blank => Ok(()),
+            Segment::If(e) => e.eval_mut(ctx, state, None),
+            Segment::Let(l) => l.eval_mut(ctx, state, None),
+            Segment::Expr(e) => state
+                .write_value(e.eval(ctx, state, None)?)
+                .map_err(Into::into),
         }
-
-        Ok(out)
     }
 }
 
 #[derive(Debug)]
 pub enum Command<'a> {
-    If(If<'a>),
+    If(If<'a, Vec<Command<'a>>>),
     Let(Let<'a>),
     Put(Vec<Expr<'a>>, Expr<'a>),
 }
 
-impl EvalMut for Command<'_> {
-    type Output<'a>
-        = Vec<CowValue<'a>>
-    where Self: 'a;
+impl<'a> EvalMut<'a> for Command<'_> {
+    type Output = ();
 
-    fn eval_mut<'a>(
+    fn eval_mut<W: Write>(
         &'a self,
         ctx: &'a Context,
-        state: &mut State<'a>,
+        state: &mut State<'a, W>,
         topic: Option<CowValue<'a>>,
-    ) -> Result<Self::Output<'a>> {
-        assert_no_topic(&topic, &self)?;
+    ) -> Result<Self::Output> {
+        assert_no_topic(&topic, self)?;
 
         match self {
             Command::If(i) => i.eval_mut(ctx, state, topic),
-            Command::Let(l) => {
-                l.eval_mut(ctx, state, topic)?;
-                Ok(vec![])
-            },
+            Command::Let(l) => l.eval_mut(ctx, state, topic),
             Command::Put(exprs, expr) => {
-                let mut out = Vec::with_capacity(exprs.len() + 1);
-
                 for expr in exprs {
-                    out.push(expr.eval(ctx, state, topic.clone())?);
+                    state.write_value(expr.eval(ctx, state, topic.clone())?)?;
                 }
 
-                out.push(expr.eval(ctx, state, topic)?);
-
-                Ok(out)
+                state
+                    .write_value(expr.eval(ctx, state, topic)?)
+                    .map_err(Into::into)
             },
         }
     }
@@ -121,23 +102,17 @@ impl EvalMut for Command<'_> {
 
 /// Tuple of `(if, elif*, else?)`
 #[derive(Debug)]
-pub struct If<'a>(
-    pub Guard<'a>,
-    pub Vec<Guard<'a>>,
-    pub Option<Vec<Command<'a>>>,
-);
+pub struct If<'a, T>(pub Guard<'a, T>, pub Vec<Guard<'a, T>>, pub Option<T>);
 
-impl EvalMut for If<'_> {
-    type Output<'a>
-        = Vec<CowValue<'a>>
-    where Self: 'a;
+impl<'a, T: EvalMut<'a, Output: Default>> EvalMut<'a> for If<'_, T> {
+    type Output = T::Output;
 
-    fn eval_mut<'a>(
+    fn eval_mut<W: Write>(
         &'a self,
         ctx: &'a Context,
-        state: &mut State<'a>,
+        state: &mut State<'a, W>,
         topic: Option<CowValue<'a>>,
-    ) -> Result<Self::Output<'a>> {
+    ) -> Result<Self::Output> {
         let mut res = self.0.eval_mut(ctx, state, topic.clone())?;
 
         for elif in &self.1 {
@@ -153,7 +128,7 @@ impl EvalMut for If<'_> {
         } else if let Some(otherwise) = &self.2 {
             otherwise.eval_mut(ctx, state, topic)
         } else {
-            Ok(vec![])
+            Ok(Default::default())
         }
     }
 }
@@ -167,19 +142,17 @@ fn bool(val: CowValue<'_>) -> Result<bool> {
 
 // Tuple of a list of commands to be run only if the attached expression is true
 #[derive(Debug)]
-pub struct Guard<'a>(pub Expr<'a>, pub Vec<Command<'a>>);
+pub struct Guard<'a, T>(pub Expr<'a>, pub T);
 
-impl EvalMut for Guard<'_> {
-    type Output<'a>
-        = Option<Vec<CowValue<'a>>>
-    where Self: 'a;
+impl<'a, T: EvalMut<'a>> EvalMut<'a> for Guard<'_, T> {
+    type Output = Option<T::Output>;
 
-    fn eval_mut<'a>(
+    fn eval_mut<W: Write>(
         &'a self,
         ctx: &'a Context,
-        state: &mut State<'a>,
+        state: &mut State<'a, W>,
         topic: Option<CowValue<'a>>,
-    ) -> Result<Self::Output<'a>> {
+    ) -> Result<Self::Output> {
         if bool(self.0.eval(ctx, state, None)?)? {
             Ok(Some(self.1.eval_mut(ctx, state, topic)?))
         } else {
@@ -191,17 +164,15 @@ impl EvalMut for Guard<'_> {
 #[derive(Debug)]
 pub struct Let<'a>(pub &'a str, pub Expr<'a>);
 
-impl EvalMut for Let<'_> {
-    type Output<'a>
-        = ()
-    where Self: 'a;
+impl<'a> EvalMut<'a> for Let<'_> {
+    type Output = ();
 
-    fn eval_mut<'a>(
+    fn eval_mut<W: Write>(
         &'a self,
         ctx: &'a Context,
-        state: &mut State<'a>,
+        state: &mut State<'a, W>,
         topic: Option<CowValue<'a>>,
-    ) -> Result<Self::Output<'a>> {
+    ) -> Result<Self::Output> {
         use std::collections::hash_map::Entry;
 
         let val = self.1.eval(ctx, state, topic)?;
@@ -219,17 +190,15 @@ impl EvalMut for Let<'_> {
 #[derive(Debug)]
 pub struct Expr<'a>(pub Box<NullChain<'a>>);
 
-impl Eval for Expr<'_> {
-    type Output<'a>
-        = CowValue<'a>
-    where Self: 'a;
+impl<'a> Eval<'a> for Expr<'_> {
+    type Output = CowValue<'a>;
 
-    fn eval<'a>(
+    fn eval<W>(
         &'a self,
         ctx: &'a Context,
-        state: &State<'a>,
+        state: &State<'a, W>,
         topic: Option<CowValue<'a>>,
-    ) -> Result<Self::Output<'a>> {
+    ) -> Result<Self::Output> {
         self.0.eval(ctx, state, topic)
     }
 }
@@ -240,15 +209,13 @@ pub enum NullChain<'a> {
     Next(NullPipeline<'a>),
 }
 
-impl Eval for NullChain<'_> {
-    type Output<'a>
-        = CowValue<'a>
-    where Self: 'a;
+impl<'a> Eval<'a> for NullChain<'_> {
+    type Output = CowValue<'a>;
 
-    fn eval<'a>(
+    fn eval<W>(
         &'a self,
         ctx: &'a Context,
-        state: &State<'a>,
+        state: &State<'a, W>,
         topic: Option<CowValue<'a>>,
     ) -> Result<CowValue<'a>> {
         match self {
@@ -268,15 +235,13 @@ pub enum NullPipeline<'a> {
     Next(Pipeline<'a>),
 }
 
-impl Eval for NullPipeline<'_> {
-    type Output<'a>
-        = CowValue<'a>
-    where Self: 'a;
+impl<'a> Eval<'a> for NullPipeline<'_> {
+    type Output = CowValue<'a>;
 
-    fn eval<'a>(
+    fn eval<W>(
         &'a self,
         ctx: &'a Context,
-        state: &State<'a>,
+        state: &State<'a, W>,
         topic: Option<CowValue<'a>>,
     ) -> Result<CowValue<'a>> {
         match self {
@@ -295,15 +260,13 @@ pub enum Pipeline<'a> {
     Next(Or<'a>),
 }
 
-impl Eval for Pipeline<'_> {
-    type Output<'a>
-        = CowValue<'a>
-    where Self: 'a;
+impl<'a> Eval<'a> for Pipeline<'_> {
+    type Output = CowValue<'a>;
 
-    fn eval<'a>(
+    fn eval<W>(
         &'a self,
         ctx: &'a Context,
-        state: &State<'a>,
+        state: &State<'a, W>,
         topic: Option<CowValue<'a>>,
     ) -> Result<CowValue<'a>> {
         match self {
@@ -319,17 +282,15 @@ pub enum Or<'a> {
     Next(And<'a>),
 }
 
-impl Eval for Or<'_> {
-    type Output<'a>
-        = CowValue<'a>
-    where Self: 'a;
+impl<'a> Eval<'a> for Or<'_> {
+    type Output = CowValue<'a>;
 
-    fn eval<'a>(
+    fn eval<W>(
         &'a self,
         ctx: &'a Context,
-        state: &State<'a>,
+        state: &State<'a, W>,
         topic: Option<CowValue<'a>>,
-    ) -> Result<Self::Output<'a>> {
+    ) -> Result<Self::Output> {
         match self {
             Self::Or(l, r) => Ok(Owned(Value::Bool(
                 bool(l.eval(ctx, state, topic.clone())?)?
@@ -346,17 +307,15 @@ pub enum And<'a> {
     Next(Compare<'a>),
 }
 
-impl Eval for And<'_> {
-    type Output<'a>
-        = CowValue<'a>
-    where Self: 'a;
+impl<'a> Eval<'a> for And<'_> {
+    type Output = CowValue<'a>;
 
-    fn eval<'a>(
+    fn eval<W>(
         &'a self,
         ctx: &'a Context,
-        state: &State<'a>,
+        state: &State<'a, W>,
         topic: Option<CowValue<'a>>,
-    ) -> Result<Self::Output<'a>> {
+    ) -> Result<Self::Output> {
         match self {
             Self::And(l, r) => Ok(Owned(Value::Bool(
                 bool(l.eval(ctx, state, topic.clone())?)?
@@ -429,17 +388,15 @@ fn partial_cmp(l: CowValue<'_>, r: CowValue<'_>) -> Result<Option<cmp::Ordering>
     })
 }
 
-impl Eval for Compare<'_> {
-    type Output<'a>
-        = CowValue<'a>
-    where Self: 'a;
+impl<'a> Eval<'a> for Compare<'_> {
+    type Output = CowValue<'a>;
 
-    fn eval<'a>(
+    fn eval<W>(
         &'a self,
         ctx: &'a Context,
-        state: &State<'a>,
+        state: &State<'a, W>,
         topic: Option<CowValue<'a>>,
-    ) -> Result<Self::Output<'a>> {
+    ) -> Result<Self::Output> {
         match self {
             Compare::Eq(l, r) => Ok(Owned(Value::Bool(
                 l.eval(ctx, state, topic.clone())? == r.eval(ctx, state, topic)?,
@@ -486,17 +443,15 @@ pub enum Unop<'a> {
     Next(Member<'a>),
 }
 
-impl Eval for Unop<'_> {
-    type Output<'a>
-        = CowValue<'a>
-    where Self: 'a;
+impl<'a> Eval<'a> for Unop<'_> {
+    type Output = CowValue<'a>;
 
-    fn eval<'a>(
+    fn eval<W>(
         &'a self,
         ctx: &'a Context,
-        state: &State<'a>,
+        state: &State<'a, W>,
         topic: Option<CowValue<'a>>,
-    ) -> Result<Self::Output<'a>> {
+    ) -> Result<Self::Output> {
         match self {
             Unop::Not(e) => Ok(Owned(Value::Bool(!bool(e.eval(ctx, state, topic)?)?))),
             Unop::Next(e) => e.eval(ctx, state, topic),
@@ -516,9 +471,9 @@ fn lens_ident<'a>(lhs: CowValue<'a>, rhs: &str) -> Result<CowValue<'a>> {
     }
 }
 
-fn lens_index<'a, R: Eval<Output<'a> = CowValue<'a>> + 'a>(
+fn lens_index<'a, R: Eval<'a, Output = CowValue<'a>>, W>(
     ctx: &'a Context,
-    state: &State<'a>,
+    state: &State<'a, W>,
     lhs: CowValue<'a>,
     rhs: &'a R,
 ) -> Result<CowValue<'a>> {
@@ -558,15 +513,13 @@ pub enum Member<'a> {
     Next(Prim<'a>),
 }
 
-impl Eval for Member<'_> {
-    type Output<'a>
-        = CowValue<'a>
-    where Self: 'a;
+impl<'a> Eval<'a> for Member<'_> {
+    type Output = CowValue<'a>;
 
-    fn eval<'a>(
+    fn eval<W>(
         &'a self,
         ctx: &'a Context,
-        state: &State<'a>,
+        state: &State<'a, W>,
         topic: Option<CowValue<'a>>,
     ) -> Result<CowValue<'a>> {
         match self {
@@ -577,9 +530,9 @@ impl Eval for Member<'_> {
     }
 }
 
-fn call<'a>(
+fn call<'a, W>(
     ctx: &'a Context,
-    state: &State<'a>,
+    state: &State<'a, W>,
     topic: Option<CowValue<'a>>,
     ident: &str,
     args: Option<&'a Args<'a>>,
@@ -608,23 +561,21 @@ pub enum Prim<'a> {
     Value(Value),
 }
 
-impl Eval for Prim<'_> {
-    type Output<'a>
-        = CowValue<'a>
-    where Self: 'a;
+impl<'a> Eval<'a> for Prim<'_> {
+    type Output = CowValue<'a>;
 
-    fn eval<'a>(
+    fn eval<W>(
         &'a self,
         ctx: &'a Context,
-        state: &State<'a>,
+        state: &State<'a, W>,
         topic: Option<CowValue<'a>>,
     ) -> Result<CowValue<'a>> {
         if matches!(self, Self::Value(_)) {
-            assert_no_topic(&topic, &self)?;
+            assert_no_topic(&topic, self)?;
         }
 
         if matches!(self, Self::LensIdent(_) | Self::LensIndex(_)) {
-            assert_topic(&topic, &self)?;
+            assert_topic(&topic, self)?;
         }
 
         #[expect(
@@ -670,15 +621,13 @@ impl Eval for Prim<'_> {
 #[derive(Debug)]
 pub struct Args<'a>(pub Vec<Arg<'a>>, pub Arg<'a>);
 
-impl Eval for Args<'_> {
-    type Output<'a>
-        = Option<Vec<CowValue<'a>>>
-    where Self: 'a;
+impl<'a> Eval<'a> for Args<'_> {
+    type Output = Option<Vec<CowValue<'a>>>;
 
-    fn eval<'a>(
+    fn eval<W>(
         &'a self,
         ctx: &'a Context,
-        state: &State<'a>,
+        state: &State<'a, W>,
         topic: Option<CowValue<'a>>,
     ) -> Result<Option<Vec<CowValue<'a>>>> {
         let mut out = Vec::with_capacity(self.0.len() + 1);
@@ -705,18 +654,16 @@ pub enum Arg<'a> {
     Expr(Expr<'a>),
 }
 
-impl Eval for Arg<'_> {
-    type Output<'a>
-        = Option<CowValue<'a>>
-    where Self: 'a;
+impl<'a> Eval<'a> for Arg<'_> {
+    type Output = Option<CowValue<'a>>;
 
-    fn eval<'a>(
+    fn eval<W>(
         &'a self,
         ctx: &'a Context,
-        state: &State<'a>,
+        state: &State<'a, W>,
         topic: Option<CowValue<'a>>,
     ) -> Result<Option<CowValue<'a>>> {
-        assert_no_topic(&topic, &self)?;
+        assert_no_topic(&topic, self)?;
 
         match self {
             Arg::Coerce(e) => Ok(match e.eval(ctx, state, topic)? {

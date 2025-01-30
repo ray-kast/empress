@@ -83,8 +83,8 @@ impl<'a> Formatter<'a> {
             functions: functions::all(),
         };
         match &self.0 {
-            FormatterState::Basic(s) => s.eval_print(&ctx, &mut out),
-            FormatterState::Extended(c) => c.eval_print(&ctx, &mut out),
+            FormatterState::Basic(s) => s.eval(&ctx, &mut out),
+            FormatterState::Extended(c) => c.eval(&ctx, &mut out),
         }?;
 
         Ok(out)

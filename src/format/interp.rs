@@ -1,7 +1,7 @@
 use std::{
     borrow::{Borrow, Cow},
     collections::HashMap,
-    fmt::{self, Debug},
+    fmt,
 };
 
 use serde_json::Map;
@@ -16,7 +16,7 @@ pub(super) fn json(value: &Value) -> String {
     clippy::ref_option,
     reason = "This is a domain-specific helper function"
 )]
-pub(super) fn assert_no_topic<D: Debug>(topic: &Option<CowValue>, d: &D) -> Result<()> {
+pub(super) fn assert_no_topic<D: fmt::Debug>(topic: &Option<CowValue>, d: &D) -> Result<()> {
     match topic {
         Some(_) => Err(Error::ExtraTopic(format!("{d:?}"))),
         None => Ok(()),
@@ -27,7 +27,7 @@ pub(super) fn assert_no_topic<D: Debug>(topic: &Option<CowValue>, d: &D) -> Resu
     clippy::ref_option,
     reason = "This is a domain-specific helper function"
 )]
-pub(super) fn assert_topic<D: Debug>(topic: &Option<CowValue<'_>>, d: &D) -> Result<()> {
+pub(super) fn assert_topic<D: fmt::Debug>(topic: &Option<CowValue<'_>>, d: &D) -> Result<()> {
     match topic {
         Some(_) => Ok(()),
         None => Err(Error::NoTopic(format!("{d:?}"))),
@@ -85,9 +85,33 @@ pub type Result<T, E = Error> = std::result::Result<T, E>;
 pub use serde_json::Value;
 pub type CowValue<'a> = Cow<'a, Value>;
 
-#[derive(Default)]
-pub struct State<'a> {
+pub struct State<'a, W> {
     pub locals: HashMap<&'a str, CowValue<'a>>,
+    out: W,
+}
+
+impl<W> State<'_, W> {
+    #[inline]
+    pub fn new(out: W) -> Self {
+        Self {
+            locals: HashMap::new(),
+            out,
+        }
+    }
+
+    #[inline]
+    pub fn out_mut(&mut self) -> &mut W { &mut self.out }
+
+    // #[inline]
+    // pub fn finish(self) -> W {
+    //     self.out
+    // }
+}
+
+impl<W: fmt::Write> State<'_, W> {
+    pub fn write_value<V: Borrow<Value>>(&mut self, value: V) -> Result<(), StreamError> {
+        write_value(value, &mut self.out)
+    }
 }
 
 pub struct Context {
@@ -95,7 +119,7 @@ pub struct Context {
     pub functions: Functions,
 }
 
-impl Debug for Context {
+impl fmt::Debug for Context {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Context")
             .field("values", &self.values)
@@ -103,42 +127,55 @@ impl Debug for Context {
     }
 }
 
-pub trait EvalMut {
-    type Output<'a>
-    where Self: 'a;
+pub trait EvalMut<'a> {
+    type Output;
 
-    fn eval_mut<'a>(
+    fn eval_mut<W: fmt::Write>(
         &'a self,
         ctx: &'a Context,
-        state: &mut State<'a>,
+        state: &mut State<'a, W>,
         topic: Option<CowValue<'a>>,
-    ) -> Result<Self::Output<'a>>;
+    ) -> Result<Self::Output>;
 }
 
-pub trait Eval {
-    type Output<'a>
-    where Self: 'a;
+impl<'a, T: EvalMut<'a, Output = ()>> EvalMut<'a> for Vec<T> {
+    type Output = ();
 
-    fn eval<'a>(
+    fn eval_mut<W: fmt::Write>(
         &'a self,
         ctx: &'a Context,
-        state: &State<'a>,
+        state: &mut State<'a, W>,
         topic: Option<CowValue<'a>>,
-    ) -> Result<Self::Output<'a>>;
+    ) -> Result<Self::Output> {
+        for val in self {
+            val.eval_mut(ctx, state, topic.clone())?;
+        }
+
+        Ok(())
+    }
 }
 
-impl<T: Eval> EvalMut for T {
-    type Output<'a>
-        = <T as Eval>::Output<'a>
-    where Self: 'a;
+pub trait Eval<'a> {
+    type Output;
+
+    fn eval<W>(
+        &'a self,
+        ctx: &'a Context,
+        state: &State<'a, W>,
+        topic: Option<CowValue<'a>>,
+    ) -> Result<Self::Output>;
+}
+
+impl<'a, T: Eval<'a>> EvalMut<'a> for T {
+    type Output = <T as Eval<'a>>::Output;
 
     #[inline]
-    fn eval_mut<'a>(
+    fn eval_mut<W>(
         &'a self,
         ctx: &'a Context,
-        state: &mut State<'a>,
+        state: &mut State<'a, W>,
         topic: Option<CowValue<'a>>,
-    ) -> Result<Self::Output<'a>> {
+    ) -> Result<Self::Output> {
         self.eval(ctx, state, topic)
     }
 }
