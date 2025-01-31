@@ -51,13 +51,6 @@ async fn timeout<
     t.try_run(std::time::Duration::from_secs(2), f).await
 }
 
-macro_rules! updated_now {
-    ($self:expr) => {{
-        $self.last_update = Instant::now();
-        Ok(())
-    }};
-}
-
 impl Player {
     pub async fn new(
         now: Instant,
@@ -89,30 +82,29 @@ impl Player {
         Ok(ret)
     }
 
-    pub async fn refresh(&mut self, now: Instant) -> Result<bool> {
-        let next_status = self.playback_status().await?;
-        let ret = self.status == next_status;
-        self.status = next_status;
-
-        if ret {
-            self.last_update = now;
-        }
-
-        Ok(ret)
+    #[inline]
+    pub async fn refresh(&mut self, now: impl Into<Option<Instant>>) -> Result<Option<Instant>> {
+        Ok(self.update_status(self.playback_status().await?, now))
     }
 
     //////// Accessors ////////
 
     #[inline]
-    pub fn status(&self) -> PlaybackStatus { self.status }
+    pub fn status(&self) -> PlaybackStatus {
+        self.status
+    }
 
     #[inline]
-    pub fn update_status(&mut self, status: PlaybackStatus) -> Option<Instant> {
+    pub fn update_status(
+        &mut self,
+        status: PlaybackStatus,
+        now: impl Into<Option<Instant>>,
+    ) -> Option<Instant> {
         if self.status == status {
             return None;
         }
 
-        let now = Instant::now();
+        let now = now.into().unwrap_or_else(Instant::now);
         self.status = status;
         self.last_update = now;
         self.position
@@ -121,7 +113,9 @@ impl Player {
     }
 
     #[inline]
-    pub fn last_update(&self) -> Instant { self.last_update }
+    pub fn last_update(&self) -> Instant {
+        self.last_update
+    }
 
     #[inline]
     pub fn force_update(&mut self) -> Instant {
@@ -175,52 +169,37 @@ impl Player {
     pub async fn next(&mut self) -> Result {
         timeout(&self.inner, PlayerProxy::next)
             .await
-            .context("Proxy call for Next failed")?;
-
-        updated_now!(self)
+            .context("Proxy call for Next failed")
     }
 
     pub async fn previous(&mut self) -> Result {
         timeout(&self.inner, PlayerProxy::previous)
             .await
-            .context("Proxy call for Previous failed")?;
-
-        updated_now!(self)
+            .context("Proxy call for Previous failed")
     }
 
     pub async fn pause(&mut self) -> Result {
         timeout(&self.inner, PlayerProxy::pause)
             .await
-            .context("Proxy call for Pause failed")?;
-
-        self.status = PlaybackStatus::Paused;
-        updated_now!(self)
+            .context("Proxy call for Pause failed")
     }
 
     pub async fn stop(&mut self) -> Result {
         timeout(&self.inner, PlayerProxy::stop)
             .await
-            .context("Proxy call for Stop failed")?;
-
-        self.status = PlaybackStatus::Stopped;
-        updated_now!(self)
+            .context("Proxy call for Stop failed")
     }
 
     pub async fn play(&mut self) -> Result {
         timeout(&self.inner, PlayerProxy::play)
             .await
-            .context("Proxy call for Play failed")?;
-
-        self.status = PlaybackStatus::Playing;
-        updated_now!(self)
+            .context("Proxy call for Play failed")
     }
 
     pub async fn set_position(&mut self, id: ObjectPath<'_>, micros: i64) -> Result {
         timeout(&self.inner, |p| p.set_position(id, micros))
             .await
-            .context("Proxy call for SetPosition failed")?;
-
-        updated_now!(self)
+            .context("Proxy call for SetPosition failed")
     }
 
     //////// Properties under MediaPlayer2 ////////
@@ -380,7 +359,9 @@ impl MatchPlayer for Player {
             .unwrap_or("")
     }
 
-    fn status(&self) -> PlaybackStatus { self.status }
+    fn status(&self) -> PlaybackStatus {
+        self.status
+    }
 }
 
 trait IntoOption {
@@ -393,14 +374,18 @@ impl IntoOption for bool {
     type Output = ();
 
     #[inline]
-    fn into_option(self) -> Option<Self::Output> { self.then_some(()) }
+    fn into_option(self) -> Option<Self::Output> {
+        self.then_some(())
+    }
 }
 
 impl<T> IntoOption for Option<T> {
     type Output = T;
 
     #[inline]
-    fn into_option(self) -> Option<Self::Output> { self }
+    fn into_option(self) -> Option<Self::Output> {
+        self
+    }
 }
 
 macro_rules! action {
@@ -450,12 +435,12 @@ action!(
 );
 action!(
     pub Pause: fn() -> (),
-    |Self, p| p.playback_status().await?.can_pause() && p.can_pause().await?,
+    |Self, p| p.status.can_pause() && p.can_pause().await?,
     |Self, p, ()| p.pause().await,
 );
 action!(
     pub PlayPause: fn(bool) -> (),
-    |Self, p| match p.playback_status().await? {
+    |Self, p| match p.status {
         PlaybackStatus::Playing if p.can_pause().await? => Some((true,)),
         PlaybackStatus::Paused if p.can_play().await? => Some((false,)),
         _ => None,
@@ -468,12 +453,12 @@ action!(
 );
 action!(
     pub Stop: fn() -> (),
-    |Self, p| p.playback_status().await?.can_stop() && p.can_control().await?,
+    |Self, p| p.status.can_stop() && p.can_control().await?,
     |Self, p, ()| p.stop().await,
 );
 action!(
     pub Play: fn() -> (),
-    |Self, p| p.playback_status().await?.can_play() && p.can_play().await?,
+    |Self, p| p.status.can_play() && p.can_play().await?,
     |Self, p, ()| p.play().await,
 );
 action!(

@@ -179,6 +179,29 @@ struct NowPlayingFormat {
     kind: Option<FormatKind>,
 }
 
+#[derive(Debug, Clone, clap::Args)]
+struct NowPlayingOpts {
+    #[command(flatten)]
+    player: PlayerOpts,
+
+    #[command(flatten)]
+    format: NowPlayingFormat,
+
+    /// Continue watching for changes to playback status and printing
+    /// updates
+    #[arg(short, long, conflicts_with("PlayerOpts"))]
+    watch: bool,
+
+    /// Separate outputs with a null byte rather than a newline - only
+    /// usable in watch mode
+    #[arg(short = '0', long, requires("watch"))]
+    zero: bool,
+
+    /// Do not output a trailing newline - not usable in watch mode
+    #[arg(short = 'n', long, conflicts_with("watch"))]
+    no_lf: bool,
+}
+
 #[derive(Debug, Clone, clap::Subcommand)]
 enum ClientCommand {
     /// Scan for any player updates the daemon missed
@@ -187,23 +210,7 @@ enum ClientCommand {
     ListPlayers,
     /// Print information about the current track
     #[command(long_about = include_str!("../etc/now_playing_long.txt"))]
-    NowPlaying {
-        #[command(flatten)]
-        player: PlayerOpts,
-
-        #[command(flatten)]
-        format: NowPlayingFormat,
-
-        /// Continue watching for changes to playback status and printing
-        /// updates
-        #[arg(short, long, conflicts_with("PlayerOpts"))]
-        watch: bool,
-
-        /// Separate outputs with a null byte rather than a newline.  Only
-        /// usable with the -w flag.
-        #[arg(short = '0', long, requires("watch"))]
-        zero: bool,
-    },
+    NowPlaying(NowPlayingOpts),
     /// Focus a player
     Raise(PlayerOpts),
     /// Skip one track forwards

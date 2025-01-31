@@ -18,10 +18,6 @@ macro_rules! courtesy_line {
     };
 }
 
-#[expect(
-    clippy::too_many_lines,
-    reason = "Somewhat unavoidably long match block"
-)]
 pub(super) async fn run(cmd: ClientCommand) -> Result {
     let conn = connection::Builder::session()
         .context("Error creatihng session connection builder")?
@@ -85,12 +81,7 @@ pub(super) async fn run(cmd: ClientCommand) -> Result {
                 println!("{player}\t{status}");
             }
         },
-        ClientCommand::NowPlaying {
-            player,
-            format,
-            watch,
-            zero,
-        } => now_playing::run(proxy, player, format, watch, zero).await?,
+        ClientCommand::NowPlaying(opts) => now_playing::run(proxy, opts).await?,
         ClientCommand::Seek {
             player,
             to: Offset::Relative(to),

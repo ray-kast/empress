@@ -16,6 +16,7 @@ use crate::server::mpris::player::PlaybackStatus;
 
 pub type Functions = HashMap<&'static str, Function>;
 
+// TODO: add pad function
 pub fn all() -> Functions {
     vec![
         ("blank", blank as Function),

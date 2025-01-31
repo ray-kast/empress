@@ -153,12 +153,12 @@ impl PlayerMap {
                 let mut player = self.get_mut(name).unwrap();
 
                 match player.refresh(now).await {
-                    Ok(true) => {
+                    Ok(Some(_)) => {
                         if let Some(ref mut c) = changes {
                             c.push(PlayerChange::Refresh(name.clone()));
                         }
                     },
-                    Ok(false) => (),
+                    Ok(None) => (),
                     Err(e) => {
                         warn!("Error refreshing player: {e:?}");
                         continue;

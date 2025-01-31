@@ -1,9 +1,4 @@
-use std::{
-    borrow::Cow,
-    fs,
-    io::{self, IsTerminal},
-    time::Duration,
-};
+use std::{borrow::Cow, fs, io, time::Duration};
 
 use anyhow::{Context, Error};
 use futures_util::StreamExt;
@@ -23,7 +18,7 @@ use crate::{
         MatchPlayer, PlayerStatus, PlayerStatusKind, Position,
     },
     timeout::Timeout,
-    FormatKind, NowPlayingFormat, PlayerOpts, Result,
+    FormatKind, NowPlayingFormat, NowPlayingOpts, Result,
 };
 
 #[derive(Debug, Clone, PartialEq, serde::Serialize)]
@@ -204,22 +199,20 @@ impl TryFrom<PlayerStatus> for NowPlaying {
 }
 
 impl MatchPlayer for NowPlaying {
-    fn bus(&self) -> &str { self.player.bus.as_ref().map_or("", |s| s) }
+    fn bus(&self) -> &str {
+        self.player.bus.as_ref().map_or("", |s| s)
+    }
 
-    fn status(&self) -> PlaybackStatus { self.status }
+    fn status(&self) -> PlaybackStatus {
+        self.status
+    }
 }
 
-pub async fn run(
-    proxy: Timeout<EmpressProxy<'_>>,
-    player: PlayerOpts,
-    format: NowPlayingFormat,
-    watch: bool,
-    zero: bool,
-) -> Result {
-    let player = player.into();
-    let fmt = FormatData::prepare(&format)?;
-    let mut fmt = Formatter::new(&fmt, watch.then_some(zero))?;
+pub async fn run(proxy: Timeout<EmpressProxy<'_>>, opts: NowPlayingOpts) -> Result {
+    let fmt = FormatData::prepare(&opts.format)?;
+    let mut fmt = Formatter::new(&fmt, &opts)?;
 
+    let player = opts.player.into();
     let status = super::try_send(&proxy, |p| async {
         if player == server::PlayerOpts::default() {
             p.now_playing().await
@@ -232,7 +225,7 @@ pub async fn run(
     let status = status.try_into()?;
     fmt.print(&status)?;
 
-    if watch {
+    if opts.watch {
         run_watch(proxy, player, fmt, status).await?;
     }
 
@@ -403,14 +396,19 @@ enum FormatterType<'a> {
     Pretty(format::Formatter<'a>),
 }
 
+enum FormatterSep {
+    Watch(char),
+    Oneshot(bool),
+}
+
 struct Formatter<'a> {
     ty: FormatterType<'a>,
-    watch_sep: Option<char>,
+    sep: FormatterSep,
     last: Option<String>,
 }
 
 impl<'a> Formatter<'a> {
-    fn new(data: &'a FormatData, watch_zero: Option<bool>) -> Result<Self> {
+    fn new(data: &'a FormatData, opts: &NowPlayingOpts) -> Result<Self> {
         Ok(Self {
             ty: match data {
                 FormatData::Json => FormatterType::Json,
@@ -418,7 +416,11 @@ impl<'a> Formatter<'a> {
                     FormatterType::Pretty(format::Formatter::compile(s, *e)?)
                 },
             },
-            watch_sep: watch_zero.map(|z| if z { '\0' } else { '\n' }),
+            sep: match (opts.watch, opts.zero, opts.no_lf) {
+                (true, z, false) => FormatterSep::Watch(if z { '\0' } else { '\n' }),
+                (false, false, n) => FormatterSep::Oneshot(!n),
+                _ => unreachable!(),
+            },
             last: None,
         })
     }
@@ -429,7 +431,7 @@ impl<'a> Formatter<'a> {
             FormatterType::Pretty(ref f) => f.run(status)?,
         };
 
-        if let Some(c) = self.watch_sep {
+        if let FormatterSep::Watch(c) = self.sep {
             s = s.replace(c, " ");
         }
 
@@ -438,10 +440,10 @@ impl<'a> Formatter<'a> {
             let mut io = io::stdout();
             write!(io, "{s}")?;
 
-            if let Some(c) = self.watch_sep {
-                write!(io, "{c}")?;
-            } else if io.is_terminal() {
-                writeln!(io)?;
+            match self.sep {
+                FormatterSep::Watch(c) => write!(io, "{c}")?,
+                FormatterSep::Oneshot(true) => writeln!(io)?,
+                FormatterSep::Oneshot(false) => (),
             }
 
             io.flush()?;

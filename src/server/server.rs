@@ -417,13 +417,14 @@ impl Server {
                 Ok(false)
             },
             (PropInterface::Player, "PlaybackStatus", Some(val)) => {
+                let now = Instant::now();
                 let val: PlaybackStatus = val
                     .downcast_ref::<&str>()
                     .context("Error downcasting playback status")?
                     .parse()
                     .context("Error parsing playback status")?;
 
-                Ok(player.update_status(val).is_some())
+                Ok(player.update_status(val, now).is_some())
             },
             _ => Ok(false),
         }
