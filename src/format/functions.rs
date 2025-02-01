@@ -66,13 +66,13 @@ fn ydhmss_micros(mut micros: i64, neg_zero: bool) -> String {
     sec %= 60;
     let mut hr = min / 60;
     min %= 60;
-    let mut day = hr / 24;
+    let day = hr / 24;
     hr %= 24;
-    let yr = day / 365;
-    day %= 365;
 
-    if yr > 0 {
-        write!(s, "{yr:01}{day:02}:{hr:02}:{min:02}:{sec:02}").unwrap();
+    if day > 365 {
+        // Probably not worth displaying anything at this point, just put an
+        // infinity symbol
+        write!(s, "\u{221e}").unwrap();
     } else if day > 0 {
         write!(s, "{day:01}:{hr:02}:{min:02}:{sec:02}").unwrap();
     } else if hr > 0 {
