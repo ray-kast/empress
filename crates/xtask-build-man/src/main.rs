@@ -5,7 +5,7 @@ use std::{
     sync::LazyLock,
 };
 
-use clap::CommandFactory;
+use clap::{CommandFactory, Parser};
 use clap_mangen::Man;
 
 mod opts {
@@ -16,8 +16,17 @@ mod opts {
     impl std::str::FromStr for Offset {
         type Err = std::convert::Infallible;
 
-        fn from_str(_: &str) -> Result<Self, Self::Err> { unreachable!() }
+        fn from_str(_: &str) -> Result<Self, Self::Err> {
+            unreachable!()
+        }
     }
+}
+
+#[derive(Parser)]
+struct Opts {
+    /// Output gzip-compressed man pages
+    #[arg(short = 'z', long)]
+    gzip: bool,
 }
 
 static DIR: LazyLock<PathBuf> = LazyLock::new(|| "man".into());
@@ -69,6 +78,7 @@ fn render_page(
 }
 
 fn render(
+    opts: &Opts,
     cmd: clap::Command,
     name: impl IntoIterator<Item: AsRef<str>> + Clone,
     include: impl IntoIterator<Item: AsRef<Path>>,
@@ -84,23 +94,27 @@ fn render(
     let dir = DIR.join(format!("man{SECTION}"));
     std::fs::create_dir_all(&dir).unwrap();
 
-    let path = dir.join(format!("{disp}.{SECTION}.gz"));
-    let mut out = flate2::write::GzEncoder::new(
-        std::fs::File::create_new(&path).unwrap(),
-        flate2::Compression::best(),
-    );
-    render_page(
-        cmd.name(name).display_name(disp),
-        SECTION,
-        include,
-        &mut out,
-    )
-    .unwrap();
-    out.finish().unwrap();
+    let path = dir.join(format!(
+        "{disp}.{SECTION}{}",
+        if opts.gzip { ".gz" } else { "" }
+    ));
+    let mut out = std::fs::File::create_new(&path).unwrap();
+    let cmd = cmd.name(name).display_name(disp);
+
+    if opts.gzip {
+        let mut out = flate2::write::GzEncoder::new(out, flate2::Compression::best());
+        render_page(cmd, SECTION, include, &mut out).unwrap();
+        out.finish().unwrap();
+    } else {
+        render_page(cmd, SECTION, include, &mut out).unwrap();
+    }
+
     println!("Rendered {}", path.display());
 }
 
 fn main() {
+    let opts = Opts::parse();
+
     // Back out of crates/xtask-build-man into the workspace root
     std::env::set_current_dir(
         PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -130,10 +144,10 @@ fn main() {
         let name = ["empress", id];
 
         match id {
-            "now-playing" => render(cmd, name, ["etc/now-playing-syntax.man"]),
-            _ => render(cmd, name, None::<&Path>),
+            "now-playing" => render(&opts, cmd, name, ["etc/now-playing-syntax.man"]),
+            _ => render(&opts, cmd, name, None::<&Path>),
         };
     }
 
-    render(cmd, ["empress"], None::<&Path>);
+    render(&opts, cmd, ["empress"], None::<&Path>);
 }
