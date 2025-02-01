@@ -2,6 +2,7 @@ use std::{collections::HashMap, fmt::Debug, future::Future, time::Instant};
 
 use anyhow::{anyhow, Context};
 use zbus::{
+    fdo,
     names::{BusName, WellKnownName},
     zvariant::{ObjectPath, OwnedValue},
     Connection,
@@ -12,7 +13,10 @@ use super::{
     position::PositionCache,
     MatchPlayer, Position,
 };
-use crate::{timeout::Timeout, Offset, Result};
+use crate::{
+    timeout::{self, Timeout},
+    Offset, Result,
+};
 
 pub(super) trait Action {
     type Arg;
@@ -49,6 +53,24 @@ async fn timeout<
     f: F,
 ) -> Result<R, crate::timeout::Error<E>> {
     t.try_run(std::time::Duration::from_secs(2), f).await
+}
+
+// Handle players that do not include required properties
+fn recover_noncompliant<T>(
+    r: Result<T, timeout::Error<fdo::Error>>,
+) -> Result<Option<T>, timeout::Error<fdo::Error>> {
+    let e = match r {
+        Err(e) => e,
+        Ok(o) => return Ok(Some(o)),
+    };
+
+    if let timeout::Error::Other(fdo::Error::ZBus(zbus::Error::FDO(e))) = &e {
+        if matches!(**e, fdo::Error::NotSupported(_)) {
+            return Ok(None);
+        }
+    }
+
+    Err(e)
 }
 
 impl Player {
@@ -120,16 +142,17 @@ impl Player {
         now
     }
 
-    pub async fn force_update_position(&self, micros: Option<i64>) -> Result<Position> {
+    pub async fn force_update_position(
+        &self,
+        micros: Option<i64>,
+    ) -> Result<Position, timeout::Error<fdo::Error>> {
         let now = Instant::now();
         let micros = if let Some(micros) = micros {
             micros
         } else {
-            timeout(&self.inner, PlayerProxy::position)
-                .await
-                .context("Proxy property get for Position failed")?
+            timeout(&self.inner, PlayerProxy::position).await?
         };
-        let rate = self.rate().await?;
+        let rate = timeout(&self.inner, PlayerProxy::rate).await?;
 
         Ok(self
             .position
@@ -220,21 +243,14 @@ impl Player {
             .context("Proxy property get for PlaybackStatus failed")
     }
 
-    pub async fn rate(&self) -> Result<f64> {
-        timeout(&self.inner, PlayerProxy::rate)
-            .await
-            .context("Proxy property get for Rate failed")
-    }
-
     pub async fn metadata(&self) -> Result<HashMap<String, OwnedValue>> {
         timeout(&self.inner, PlayerProxy::metadata)
             .await
             .context("Proxy property get for Metadata failed")
     }
 
-    pub async fn volume(&self) -> Result<f64> {
-        timeout(&self.inner, PlayerProxy::volume)
-            .await
+    pub async fn volume(&self) -> Result<Option<f64>> {
+        recover_noncompliant(timeout(&self.inner, PlayerProxy::volume).await)
             .context("Proxy property get for Volume failed")
     }
 
@@ -244,12 +260,13 @@ impl Player {
             .context("Proxy property set for Volume failed")
     }
 
-    pub async fn position(&self) -> Result<Position> {
-        if let Some(pos) = self.position.get() {
+    pub async fn position(&self) -> Result<Option<Position>> {
+        recover_noncompliant(if let Some(pos) = self.position.get() {
             Ok(pos)
         } else {
             self.force_update_position(None).await
-        }
+        })
+        .context("Proxy property get for Position or Rate failed")
     }
 
     pub async fn can_go_next(&self) -> Result<bool> {
@@ -299,7 +316,13 @@ impl Player {
         let meta = self.metadata().await?;
 
         let pos = match pos {
-            Offset::Relative(p) => self.position().await?.get(None) + (p * 1e6).round() as i64,
+            Offset::Relative(p) => {
+                self.position()
+                    .await?
+                    .context("Player did not report a position")?
+                    .get(None)
+                    + (p * 1e6).round() as i64
+            },
             Offset::Absolute(p) => (p * 1e6).round() as i64,
         };
 
@@ -318,7 +341,10 @@ impl Player {
     async fn offset_volume(&mut self, vol: Offset) -> Result<f64> {
         let (vol, set) = match vol {
             Offset::Relative(v) => {
-                let old = self.volume().await?;
+                let old = self
+                    .volume()
+                    .await?
+                    .context("Player did not report a volume level")?;
                 let new = old + v;
 
                 if (new - old).abs() > 1e-5 {

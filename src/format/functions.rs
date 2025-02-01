@@ -25,6 +25,7 @@ pub fn all() -> Functions {
         ("join", join),
         ("json", json),
         ("lower", lower),
+        ("percent", percent),
         ("shorten", shorten),
         ("shortenMid", shorten_mid),
         ("symbol", symbol),
@@ -44,7 +45,7 @@ fn is_blank(value: &Value) -> bool {
         Value::Null => true,
         Value::Bool(b) => !b,
         Value::Number(n) => {
-            n.as_i128().is_some_and(|i| i == 0) || n.as_f64().is_some_and(|f| f.abs() < 1e5)
+            n.as_i128().is_some_and(|i| i == 0) || n.as_f64().is_some_and(|f| f.abs() < 1e-7)
         },
         Value::String(s) => s.trim_start().is_empty(),
         Value::Array(a) => a.iter().all(is_blank),
@@ -169,6 +170,27 @@ fn json(inp: Input) -> Output {
 }
 
 fn lower(inp: Input) -> Output { stream_str(inp, |s| s.to_lowercase()) }
+
+fn percent(inp: Input) -> Output {
+    let (_ctx, Topic(Number::<f64>(n)), ()) = inp.try_into()?;
+
+    Ok(Owned(Value::String(if n.is_finite() {
+        let pct = (n * 100.0).round();
+        let pct = if n <= 1.0 {
+            if n - 1.0 > -1e-7 {
+                100.0
+            } else {
+                pct.min(99.0)
+            }
+        } else {
+            pct
+        };
+
+        format!("{pct}%")
+    } else {
+        "\u{2014}%".into()
+    })))
+}
 
 fn shorten(inp: Input) -> Output {
     let (_ctx, Topic(Any(val)), (Number::<usize>(len), (Any(ell), ()))) = inp.try_into()?;

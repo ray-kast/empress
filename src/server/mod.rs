@@ -118,6 +118,7 @@ pub struct PlayerStatus {
     pub bus: String,
     pub ident: String,
     pub status: PlaybackStatus,
+    pub volume: f64,
     pub rate: f64,
     pub position: i64,
     pub metadata: HashMap<String, OwnedValue>,

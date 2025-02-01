@@ -33,8 +33,9 @@ struct Player {
 #[derive(Debug, Clone, PartialEq, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 struct NowPlaying {
-    status: PlaybackStatus,
     player: Player,
+    status: PlaybackStatus,
+    volume: f64,
     rate: f64,
     position: Option<i64>,
 
@@ -130,6 +131,7 @@ impl TryFrom<PlayerStatus> for NowPlaying {
             bus,
             ident,
             status,
+            volume,
             rate,
             position,
             mut metadata,
@@ -170,8 +172,9 @@ impl TryFrom<PlayerStatus> for NowPlaying {
         trace!("Unused metadata for status: {metadata:?}");
 
         Ok(Self {
-            status,
             player: Player { bus, id },
+            status,
+            volume,
             rate,
             position,
             track_id,

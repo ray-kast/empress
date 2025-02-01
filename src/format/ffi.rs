@@ -109,6 +109,13 @@ impl MarshalNumber for i64 {
     }
 }
 
+impl MarshalNumber for f64 {
+    fn marshal_num(num: &serde_json::Number) -> Result<Self> {
+        num.as_f64()
+            .ok_or_else(|| Error::Type("an f64", Value::Number(num.clone())))
+    }
+}
+
 impl<'a, T: MarshalTopic<'a>, A: Marshal<'a>> TryFrom<Input<'a>> for (&'a Context, T, A) {
     type Error = Error;
 

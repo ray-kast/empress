@@ -642,12 +642,9 @@ impl Server {
                     .map_or_else(String::new, Into::into);
                 let ident = player.identity().await?;
                 let status = player.status();
+                let volume = player.volume().await?.unwrap_or(0.0);
                 let (rate, position) = if has_track {
-                    player
-                        .position()
-                        .await
-                        .ok()
-                        .map(|p| (p.rate(), p.get(None)))
+                    player.position().await?.map(|p| (p.rate(), p.get(None)))
                 } else {
                     None
                 }
@@ -662,6 +659,7 @@ impl Server {
                     bus,
                     ident,
                     status,
+                    volume,
                     rate: rate.unwrap_or(0.0),
                     position: position.unwrap_or(0),
                     metadata,
