@@ -161,6 +161,23 @@ impl<'a, T: EvalMut<'a>> EvalMut<'a> for Guard<'_, T> {
     }
 }
 
+impl<'a, T: Eval<'a>> Eval<'a> for Guard<'_, T> {
+    type Output = Option<T::Output>;
+
+    fn eval<W>(
+        &'a self,
+        ctx: &'a Context,
+        state: &State<'a, W>,
+        topic: Option<CowValue<'a>>,
+    ) -> Result<Self::Output> {
+        if bool(self.0.eval(ctx, state, None)?)? {
+            Ok(Some(self.1.eval(ctx, state, topic)?))
+        } else {
+            Ok(None)
+        }
+    }
+}
+
 #[derive(Debug)]
 pub struct Let<'a>(pub &'a str, pub Expr<'a>);
 
@@ -186,9 +203,11 @@ impl<'a> EvalMut<'a> for Let<'_> {
     }
 }
 
-#[repr(transparent)]
 #[derive(Debug)]
-pub struct Expr<'a>(pub Box<NullChain<'a>>);
+pub enum Expr<'a> {
+    Ternary(Box<Ternary<'a>>),
+    Next(Box<NullChain<'a>>),
+}
 
 impl<'a> Eval<'a> for Expr<'_> {
     type Output = CowValue<'a>;
@@ -199,7 +218,31 @@ impl<'a> Eval<'a> for Expr<'_> {
         state: &State<'a, W>,
         topic: Option<CowValue<'a>>,
     ) -> Result<Self::Output> {
-        self.0.eval(ctx, state, topic)
+        match self {
+            Self::Ternary(t) => t.eval(ctx, state, topic),
+            Self::Next(e) => e.eval(ctx, state, topic),
+        }
+    }
+}
+
+// Tuple of a guarded if-expression and a fallback else-expression
+#[derive(Debug)]
+pub struct Ternary<'a>(pub Guard<'a, Expr<'a>>, pub Expr<'a>);
+
+impl<'a> Eval<'a> for Ternary<'a> {
+    type Output = CowValue<'a>;
+
+    fn eval<W>(
+        &'a self,
+        ctx: &'a Context,
+        state: &State<'a, W>,
+        topic: Option<CowValue<'a>>,
+    ) -> Result<Self::Output> {
+        Ok(if let Some(res) = self.0.eval(ctx, state, topic.clone())? {
+            res
+        } else {
+            self.1.eval(ctx, state, topic)?
+        })
     }
 }
 

@@ -34,7 +34,9 @@ pub enum Token<'a> {
     KwFalse,
     KwIf,
     KwLet,
+    KwNil,
     KwPut,
+    KwThen,
     KwTrue,
 
     Dot,
@@ -316,7 +318,9 @@ fn ident(s: &str) -> BResult {
         btag("false", Token::KwFalse),
         btag("if", Token::KwIf),
         btag("let", Token::KwLet),
+        btag("nil", Token::KwNil),
         btag("put", Token::KwPut),
+        btag("then", Token::KwThen),
         btag("true", Token::KwTrue),
     ])
     .parse_complete(s);

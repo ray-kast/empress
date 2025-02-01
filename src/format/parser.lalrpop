@@ -1,6 +1,6 @@
 use std::borrow::Cow;
 
-use serde_json::Number;
+use serde_json::{Number, Value};
 
 use super::super::{ast, lexer};
 
@@ -19,7 +19,9 @@ extern {
     "false" => lexer::Token::KwFalse,
     "if" => lexer::Token::KwIf,
     "let" => lexer::Token::KwLet,
+    "nil" => lexer::Token::KwNil,
     "put" => lexer::Token::KwPut,
+    "then" => lexer::Token::KwThen,
     "true" => lexer::Token::KwTrue,
 
     "." => lexer::Token::Dot,
@@ -81,8 +83,11 @@ Endif = "end";
 Let: ast::Let<'i> = "let" <i:Ident> ":=" <e:Expr> => ast::Let(i, e);
 
 Expr: ast::Expr<'i> = {
-  NullChain => ast::Expr(Box::new(<>)),
+  Ternary => ast::Expr::Ternary(Box::new(<>)),
+  NullChain => ast::Expr::Next(Box::new(<>)),
 };
+
+Ternary: ast::Ternary<'i> = <i:IfGuard<("then" <Expr>)>> <e:Else<Expr>> => ast::Ternary(i, e);
 
 NullChain: ast::NullChain<'i> = {
   <l:NullChain> "??" <r:NullPipeline> => ast::NullChain::Chain(Box::new(l), r),
@@ -140,6 +145,7 @@ Prim: ast::Prim<'i> = {
   "." "[" <Expr> "]" => ast::Prim::LensIndex(<>),
   <Ident> "(" <Args?> ")" => ast::Prim::Call(<>),
   "[" <Args?> "]" => ast::Prim::Array(<>),
+  "nil" => ast::Prim::Value(Value::Null),
   "true" => ast::Prim::Value(true.into()),
   "false" => ast::Prim::Value(false.into()),
   Ident => ast::Prim::Ident(<>),

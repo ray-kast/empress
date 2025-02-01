@@ -166,20 +166,6 @@ pub trait Eval<'a> {
     ) -> Result<Self::Output>;
 }
 
-impl<'a, T: Eval<'a>> EvalMut<'a> for T {
-    type Output = <T as Eval<'a>>::Output;
-
-    #[inline]
-    fn eval_mut<W>(
-        &'a self,
-        ctx: &'a Context,
-        state: &mut State<'a, W>,
-        topic: Option<CowValue<'a>>,
-    ) -> Result<Self::Output> {
-        self.eval(ctx, state, topic)
-    }
-}
-
 pub fn write_value<V: Borrow<Value>, W: fmt::Write>(
     value: V,
     mut out: W,
