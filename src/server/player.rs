@@ -90,9 +90,7 @@ impl Player {
     //////// Accessors ////////
 
     #[inline]
-    pub fn status(&self) -> PlaybackStatus {
-        self.status
-    }
+    pub fn status(&self) -> PlaybackStatus { self.status }
 
     #[inline]
     pub fn update_status(
@@ -113,9 +111,7 @@ impl Player {
     }
 
     #[inline]
-    pub fn last_update(&self) -> Instant {
-        self.last_update
-    }
+    pub fn last_update(&self) -> Instant { self.last_update }
 
     #[inline]
     pub fn force_update(&mut self) -> Instant {
@@ -359,9 +355,7 @@ impl MatchPlayer for Player {
             .unwrap_or("")
     }
 
-    fn status(&self) -> PlaybackStatus {
-        self.status
-    }
+    fn status(&self) -> PlaybackStatus { self.status }
 }
 
 trait IntoOption {
@@ -374,18 +368,14 @@ impl IntoOption for bool {
     type Output = ();
 
     #[inline]
-    fn into_option(self) -> Option<Self::Output> {
-        self.then_some(())
-    }
+    fn into_option(self) -> Option<Self::Output> { self.then_some(()) }
 }
 
 impl<T> IntoOption for Option<T> {
     type Output = T;
 
     #[inline]
-    fn into_option(self) -> Option<Self::Output> {
-        self
-    }
+    fn into_option(self) -> Option<Self::Output> { self }
 }
 
 macro_rules! action {

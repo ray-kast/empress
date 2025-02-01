@@ -5,6 +5,7 @@ use futures_util::StreamExt;
 use jiff::civil::DateTime;
 use log::{trace, warn};
 use zbus::{
+    fdo,
     proxy::PropertyChanged,
     zvariant::{ObjectPath, OwnedValue},
 };
@@ -15,7 +16,7 @@ use crate::{
     server::{
         self,
         mpris::{self, player::PlaybackStatus},
-        MatchPlayer, PlayerStatus, PlayerStatusKind, Position,
+        MatchPlayer, PlayerOpts, PlayerStatus, PlayerStatusKind, Position,
     },
     timeout::Timeout,
     FormatKind, NowPlayingFormat, NowPlayingOpts, Result,
@@ -28,6 +29,7 @@ struct Player {
     id: Option<String>,
 }
 
+// TODO: add volume to output
 #[derive(Debug, Clone, PartialEq, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 struct NowPlaying {
@@ -199,34 +201,40 @@ impl TryFrom<PlayerStatus> for NowPlaying {
 }
 
 impl MatchPlayer for NowPlaying {
-    fn bus(&self) -> &str {
-        self.player.bus.as_ref().map_or("", |s| s)
-    }
+    fn bus(&self) -> &str { self.player.bus.as_ref().map_or("", |s| s) }
 
-    fn status(&self) -> PlaybackStatus {
-        self.status
-    }
+    fn status(&self) -> PlaybackStatus { self.status }
 }
 
-pub async fn run(proxy: Timeout<EmpressProxy<'_>>, opts: NowPlayingOpts) -> Result {
+struct StatusCommand<'a>(&'a PlayerOpts);
+impl<'p> super::ProxyCommand<'p> for StatusCommand<'_> {
+    type Output = PlayerStatus;
+    type Then = PlayerStatus;
+
+    async fn run(&self, proxy: &EmpressProxy<'p>) -> fdo::Result<Self::Output> {
+        if *self.0 == PlayerOpts::default() {
+            proxy.now_playing().await
+        } else {
+            proxy.player_status(self.0).await
+        }
+    }
+
+    #[inline]
+    fn then(&self, out: Self::Output) -> Result<Self::Then> { Ok(out) }
+}
+
+pub async fn run(conn: &zbus::Connection, opts: NowPlayingOpts) -> Result {
     let fmt = FormatData::prepare(&opts.format)?;
     let mut fmt = Formatter::new(&fmt, &opts)?;
 
     let player = opts.player.into();
-    let status = super::try_send(&proxy, |p| async {
-        if player == server::PlayerOpts::default() {
-            p.now_playing().await
-        } else {
-            p.player_status(&player).await
-        }
-    })
-    .await?;
+    let status = super::try_run(conn, StatusCommand(&player)).await?;
 
     let status = status.try_into()?;
     fmt.print(&status)?;
 
     if opts.watch {
-        run_watch(proxy, player, fmt, status).await?;
+        run_watch(conn, player, fmt, status).await?;
     }
 
     Ok(())
@@ -278,7 +286,7 @@ async fn watch_tick(status: &NowPlaying) -> Option<WatchEvent<'static>> {
 }
 
 async fn run_watch(
-    proxy: Timeout<EmpressProxy<'_>>,
+    conn: &zbus::Connection,
     player: server::PlayerOpts,
     mut fmt: Formatter<'_>,
     mut status: NowPlaying,
@@ -286,6 +294,7 @@ async fn run_watch(
     let mut position = status.capture_position();
 
     let player = player.build().context("Invalid player filter options")?;
+    let proxy = super::dial(conn).await?;
     let mut stream = proxy
         .run(
             Duration::from_secs(1),
@@ -437,7 +446,7 @@ impl<'a> Formatter<'a> {
 
         if self.last.as_ref().is_none_or(|l| *l != s) {
             use io::prelude::*;
-            let mut io = io::stdout();
+            let mut io = io::stdout().lock();
             write!(io, "{s}")?;
 
             match self.sep {
