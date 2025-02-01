@@ -13,13 +13,14 @@ use zbus::{
 use super::proxy::EmpressProxy;
 use crate::{
     format,
+    opts::{FormatKind, NowPlayingFormat, NowPlayingOpts},
     server::{
         self,
         mpris::{self, player::PlaybackStatus},
         MatchPlayer, PlayerOpts, PlayerStatus, PlayerStatusKind, Position,
     },
     timeout::Timeout,
-    FormatKind, NowPlayingFormat, NowPlayingOpts, Result,
+    Result,
 };
 
 #[derive(Debug, Clone, PartialEq, serde::Serialize)]
@@ -383,12 +384,12 @@ enum FormatData<'a> {
 impl<'a> FormatData<'a> {
     fn prepare(format: &'a NowPlayingFormat) -> Result<Self> {
         Ok(match (format.kind, &format.string, &format.file) {
-            (k, None, None) => match k.unwrap_or(FormatKind::Pretty) {
+            (k, None, None) => match k {
                 FormatKind::Json => Self::Json,
                 FormatKind::Pretty => Self::Pretty(FORMAT_PRETTY.into(), true),
             },
-            (None, Some(s), None) => Self::Pretty(s.into(), format.extended),
-            (None, None, Some(p)) => {
+            (FormatKind::Pretty, Some(s), None) => Self::Pretty(s.into(), format.extended),
+            (FormatKind::Pretty, None, Some(p)) => {
                 let mut s = fs::read_to_string(p)
                     .with_context(|| format!("Error reading format from {p:?}"))?;
 

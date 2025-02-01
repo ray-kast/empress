@@ -1,0 +1,15 @@
+[package]
+name = "xtask-build-man"
+authors.workspace = true
+version.workspace = true
+edition.workspace = true
+publish = false
+
+[dependencies]
+clap.features = ["derive", "string"]
+clap.workspace = true
+clap_mangen = "0.2.26"
+flate2 = "1.0.35"
+
+[lints]
+workspace = true

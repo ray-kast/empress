@@ -14,8 +14,9 @@ use super::{
     MatchPlayer, Position,
 };
 use crate::{
+    opts::Offset,
     timeout::{self, Timeout},
-    Offset, Result,
+    Result,
 };
 
 pub(super) trait Action {

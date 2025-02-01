@@ -10,9 +10,10 @@ use zbus::{connection, fdo, Connection};
 
 use self::proxy::EmpressProxy;
 use crate::{
+    opts::{ClientCommand, Offset},
     server::{self, mpris::player},
     timeout::{self, Timeout},
-    ClientCommand, Offset, Result, SERVER_NAME,
+    Result, SERVER_NAME,
 };
 
 mod now_playing;

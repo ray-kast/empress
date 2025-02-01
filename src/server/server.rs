@@ -30,8 +30,9 @@ use super::{
     Player, PlayerList, PlayerMap, PlayerOpts, PlayerStatus, PlayerStatusKind, ZResult,
 };
 use crate::{
+    opts::Offset,
     server::{signal_matcher::SignalMatcher, PlayerMatcher},
-    Offset, Result,
+    Result,
 };
 
 #[derive(Clone, Copy)]

@@ -1,0 +1,2 @@
+[alias]
+build-man = "run -p xtask-build-man --"
