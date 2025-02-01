@@ -55,11 +55,11 @@ impl<'a> EvalMut<'a> for Segment<'_> {
         assert_no_topic(&topic, self)?;
 
         match self {
-            Segment::Fragment(s) => state.out_mut().write_str(s).map_err(Into::into),
-            Segment::Blank => Ok(()),
-            Segment::If(e) => e.eval_mut(ctx, state, None),
-            Segment::Let(l) => l.eval_mut(ctx, state, None),
-            Segment::Expr(e) => state
+            Self::Fragment(s) => state.out_mut().write_str(s).map_err(Into::into),
+            Self::Blank => Ok(()),
+            Self::If(e) => e.eval_mut(ctx, state, None),
+            Self::Let(l) => l.eval_mut(ctx, state, None),
+            Self::Expr(e) => state
                 .write_value(e.eval(ctx, state, None)?)
                 .map_err(Into::into),
         }
@@ -85,9 +85,9 @@ impl<'a> EvalMut<'a> for Command<'_> {
         assert_no_topic(&topic, self)?;
 
         match self {
-            Command::If(i) => i.eval_mut(ctx, state, topic),
-            Command::Let(l) => l.eval_mut(ctx, state, topic),
-            Command::Put(exprs, expr) => {
+            Self::If(i) => i.eval_mut(ctx, state, topic),
+            Self::Let(l) => l.eval_mut(ctx, state, topic),
+            Self::Put(exprs, expr) => {
                 for expr in exprs {
                     state.write_value(expr.eval(ctx, state, topic.clone())?)?;
                 }
@@ -398,34 +398,34 @@ impl<'a> Eval<'a> for Compare<'_> {
         topic: Option<CowValue<'a>>,
     ) -> Result<Self::Output> {
         match self {
-            Compare::Eq(l, r) => Ok(Owned(Value::Bool(
+            Self::Eq(l, r) => Ok(Owned(Value::Bool(
                 l.eval(ctx, state, topic.clone())? == r.eval(ctx, state, topic)?,
             ))),
-            Compare::Neq(l, r) => Ok(Owned(Value::Bool(
+            Self::Neq(l, r) => Ok(Owned(Value::Bool(
                 l.eval(ctx, state, topic.clone())? != r.eval(ctx, state, topic)?,
             ))),
-            Compare::Lt(l, r) => Ok(Owned(Value::Bool(
+            Self::Lt(l, r) => Ok(Owned(Value::Bool(
                 partial_cmp(
                     l.eval(ctx, state, topic.clone())?,
                     r.eval(ctx, state, topic)?,
                 )?
                 .is_some_and(cmp::Ordering::is_lt),
             ))),
-            Compare::Gt(l, r) => Ok(Owned(Value::Bool(
+            Self::Gt(l, r) => Ok(Owned(Value::Bool(
                 partial_cmp(
                     l.eval(ctx, state, topic.clone())?,
                     r.eval(ctx, state, topic)?,
                 )?
                 .is_some_and(cmp::Ordering::is_gt),
             ))),
-            Compare::Le(l, r) => Ok(Owned(Value::Bool(
+            Self::Le(l, r) => Ok(Owned(Value::Bool(
                 partial_cmp(
                     l.eval(ctx, state, topic.clone())?,
                     r.eval(ctx, state, topic)?,
                 )?
                 .is_some_and(cmp::Ordering::is_le),
             ))),
-            Compare::Ge(l, r) => Ok(Owned(Value::Bool(
+            Self::Ge(l, r) => Ok(Owned(Value::Bool(
                 partial_cmp(
                     l.eval(ctx, state, topic.clone())?,
                     r.eval(ctx, state, topic)?,
@@ -453,8 +453,8 @@ impl<'a> Eval<'a> for Unop<'_> {
         topic: Option<CowValue<'a>>,
     ) -> Result<Self::Output> {
         match self {
-            Unop::Not(e) => Ok(Owned(Value::Bool(!bool(e.eval(ctx, state, topic)?)?))),
-            Unop::Next(e) => e.eval(ctx, state, topic),
+            Self::Not(e) => Ok(Owned(Value::Bool(!bool(e.eval(ctx, state, topic)?)?))),
+            Self::Next(e) => e.eval(ctx, state, topic),
         }
     }
 }
@@ -666,11 +666,11 @@ impl<'a> Eval<'a> for Arg<'_> {
         assert_no_topic(&topic, self)?;
 
         match self {
-            Arg::Coerce(e) => Ok(match e.eval(ctx, state, topic)? {
+            Self::Coerce(e) => Ok(match e.eval(ctx, state, topic)? {
                 Owned(Value::Null) | Borrowed(Value::Null) => None,
                 v => Some(v),
             }),
-            Arg::Expr(e) => e.eval(ctx, state, topic).map(Some),
+            Self::Expr(e) => e.eval(ctx, state, topic).map(Some),
         }
     }
 }
