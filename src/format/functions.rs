@@ -53,7 +53,7 @@ fn is_blank(value: &Value) -> bool {
     }
 }
 
-fn ydhmss_micros(mut micros: i64, neg_zero: bool) -> String {
+fn dhmss_micros(mut micros: i64, neg_zero: bool) -> String {
     let mut s = String::new();
 
     if micros < 0 || micros == 0 && neg_zero {
@@ -142,7 +142,7 @@ fn compact(inp: Input) -> Output {
 fn eta(inp: Input) -> Output {
     let (_ctx, Topic(Number::<i64>(len)), (Number::<i64>(duration), ())) = inp.try_into()?;
 
-    Ok(Owned(Value::String(ydhmss_micros(len - duration, true))))
+    Ok(Owned(Value::String(dhmss_micros(len - duration, true))))
 }
 
 fn join(inp: Input) -> Output {
@@ -261,9 +261,9 @@ fn shorten_mid(inp: Input) -> Output {
 
 fn symbol(inp: Input) -> Output {
     stream_str(inp, |s| match s.parse() {
-        Ok(PlaybackStatus::Playing) => "▶".into(),
-        Ok(PlaybackStatus::Paused) => "⏸".into(),
-        Ok(PlaybackStatus::Stopped) => "⏹".into(),
+        Ok(PlaybackStatus::Playing) => "\u{25b6}".into(),
+        Ok(PlaybackStatus::Paused) => "\u{23f8}".into(),
+        Ok(PlaybackStatus::Stopped) => "\u{23f9}".into(),
         Err(_) => s,
     })
 }
@@ -271,7 +271,7 @@ fn symbol(inp: Input) -> Output {
 fn time(inp: Input) -> Output {
     let (_ctx, Topic(Number::<i64>(len)), ()) = inp.try_into()?;
 
-    Ok(Owned(Value::String(ydhmss_micros(len, false))))
+    Ok(Owned(Value::String(dhmss_micros(len, false))))
 }
 
 fn trim(inp: Input) -> Output { stream_str(inp, |s| s.trim().to_owned()) }

@@ -1,10 +1,198 @@
-.SH BASIC FORMAT STRING SYNTAX
-todo
-.SH EXTENDED FORMAT STRING SYNTAX
-todo
-.SH EXPRESSION SYNTAX
-todo
-.SH BUILTIN VARIABLE REFERENCE
-todo
-.SH FUNCTION REFERENCE
-todo
+.SH FORMAT STRING SYNTAX
+Format strings passed to the
+.B \-\-format
+flag or given in files passed to the
+.B \-\-format-from
+flag are by default evaluated using handlebars-like syntax. A format string
+using the default syntax is parsed as a sequence of \fIsegments\fP, where each
+segment is one of the following:
+.RS
+.TP
+.I string...
+A raw string which will be printed verbatim. String escapes are allowed, see
+the section
+.B String Escapes
+below for more details.
+.TP
+.B {{ }}
+An empty block, which prints nothing but can be used to escape any amount of
+whitespace.
+.TP
+.B {{\~\fIexpr\fP\~}}
+An interpolated expression. The expression \fIexpr\fP is evaluated and its
+resulting value is printed. See the section
+.B Expression Syntax
+below for more details on the syntax of \fIexpr\fP.
+.TP
+.B {{\~let\~\fIname\fP :=\~\fIexpr\fP\~}}
+A let-binding, which prints nothing and assigns the value \fIexpr\fP to the
+variable \fIname\fP.
+.TP
+\fB{{\~if\fP\~\fIexpr\fP\~\fB}}\fP \fIsegment...\fP \
+[\~\fB{{\~elif\fP\~\fIexpr\fP\~\fB}}\fP \fIsegment...\fP\~]\~\fI...\fP \
+[\~\fB{{\~else\~}}\fP \fIsegment...\fP\~] \fB{{\~end\~}}\fP
+.B TODO
+.RE
+.PP
+Segments are evaluated in sequence and their resulting values are concatenated
+and printed.
+.SS Extended Syntax
+When the
+.B \-\-extended
+option is given, format strings passed to
+.B \-\-format
+or
+.b \-\-format\-from
+are evaluated using a different syntax that is more amenable to complex
+expressions. Extended format strings are parsed as a sequence of
+\fIcommands\fP, where each command is one of the following:
+.RS
+.TP
+\fBput\fP\~\fIexpr\fP [\~,\~\fIexpr\fP\~]\~...
+Evaluate each \fIexpr\fP and print their resulting values, concatenated in
+order. See
+.B Expression Syntax
+below for more details on the syntax of \fIexpr\fP.
+.TP
+.B let\~\fIname\fP :=\~\fIexpr\fP
+A let-binding. The expression \fIexpr\fP is evaluated and its value is assigned
+to the variable \fIname\fP.
+.TP
+\fBif\fP\~\fIexpr\fP \fIcommand...\fP \
+[\~\fBelif\fP\~\fIexpr\fP \fIcommand...\fP\~]\~\fI...\fP \
+[\~\fBelse\fP \fIcommand...\fP\~] \fBend\fP
+.B TODO
+.RE
+.PP
+.SS Expression Syntax
+.B TODO
+.SS String Escapes
+Raw strings and string expressions support a range of escape sequences prefixed
+with a backslash. The following escapes are supported:
+.RS
+.TP
+.B \e{
+\fI(inside a raw string)\fP a \fB{\fP left bracket character
+.TP
+.B \e\[aq]
+\fI(inside a single-quoted \[aq]...\[aq] string)\fP an ASCII \fB\[aq]\fP single quote
+character
+.TP
+.B \e\[dq]
+\fI(inside a double-quoted \[dq]...\[dq] string)\fP an ASCII \fB\[dq]\fP double quote
+character
+.TP
+.B \e\e
+a literal backslash character
+.TP
+.B \e0
+a \fBNUL\fP character (if
+.B --zero
+is present, will be replaced with a space)
+.TP
+.B \en
+a newline character (if
+.B \-\-watch
+is present and
+.B \-\-zero
+is not, will be replaced with a space)
+.TP
+.B \er
+a carriage return character
+.TP
+.B \et
+a tab character
+.TP
+.B \ee
+an \fBESC\fP character (hex 1B)
+.TP
+.B \ex\fIXX\fP
+a single-byte character with hexadecimal value \fIXX\fP
+.TP
+.B \eu{\fIXX...\fP}
+a Unicode character with hexadecimal code point \fIXX...\fP
+.RE
+.PP
+Additionally, newlines inside strings which are immediately preceded by a
+\fB\e\fP character will be escaped, along with all leading whitespace on the
+following line. For instance, the following expression evaluates to \[dq]hello,
+world\[dq]:
+.RS
+\[dq]hello, \e
+.br
+world\[dq]
+.RE
+.SS Variable Reference
+.B TODO
+.SS Function Reference
+The following functions are available when evaluating expressions:
+.RS
+.TP
+.B blank(\fIexpr\fP)
+Evaluates to true if \fIexpr\fP is \[lq]blank\[rq] according to a heuristic.
+Null or false values, zeroes, empty or whitespace-only strings, empty objects,
+and arrays with no non-blank values are all considered blank.
+.TP
+.B \fIarray\fP | compact
+Returns the input \fIarray\fP with all null values and empty strings removed
+.TP
+.B \fItime\fP | eta(\fIduration\fP)
+Formats the remaining time between \fItime\fP and \fIduration\fP in h:mm:ss
+or m:ss format.
+.TP
+.B \fIarray\fP | join(\fIseparator\fP)
+Concatenates the values of \fIarray\fP, inserting \fIseparator\fP between each
+element.
+.TP
+.B \fIvalue\fP | json
+Returns \fIvalue\fP serialized to a JSON string.
+.TP
+.B \fIvalue\fP | lower
+Returns the string representation of \fIvalue\fP, converted to lowercase.
+.TP
+.B \fIfraction\fP | percent
+Multiplies the input \fIfraction\fP by 100 and formats it as a percentage.
+.TP
+.B \fIvalue\fP | shorten(\fIlength\fP, \fIellipsis\fP)
+Converts \fIvalue\fP to a string. If the resulting string is longer than
+\fIlength\fP, returns the string trimmed to no more than \fIlength\fP
+characters long and ending in \fIellipsis\fP; otherwise, returns the full
+string.
+.TP
+.B \fIvalue\fP | shortenMid(\fIlength\fP, \fIellipsis\fP)
+Converts \fIvalue\fP to a string. If the resulting string is longer than
+\fIlength\fP, returns the string trimmed to no more than \fIlength\fP
+characters by removing the middle of the string and replacing it with
+\fIellipsis\fP; otherwise, returns the full string.
+.TP
+.B \fIvalue\fP | symbol
+Converts \fIvalue\fP to a string symbol, depending on its value.  The following
+conversions are supported:
+.RS
+.TP
+Playing
+converts to a \[u25B6] playing symbol
+.TP
+Paused
+converts to a \[u23F8] paused symbol
+.TP
+Stopped
+converts to a \[u23F9] stopped symbol
+.RE
+.TP
+.B \fItime\fP | time
+Formats \fItime\fP in h:mm:ss or m:ss format.
+.TP
+.B \fIvalue\fP | trim
+Returns the string representation of \fIvalue\fP, with all leading and trailing
+whitespace removed.
+.TP
+.B \fIvalue\fP | upper
+Returns the string representation of \fIvalue\fP, converted to lowercase.
+.TP
+.B \fIvalue\fP | xml
+Returns the string representation of \fIvalue\fP, with all invalid XML
+characters replaced with their corresponding entities. Useful if the formatted
+output must be valid Pango or HTML markup.
+.RE
+.PP
