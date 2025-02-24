@@ -354,7 +354,7 @@ async fn run_watch(
 
 #[rustfmt::skip]
 const FORMAT_PRETTY: &str = "\
-    if finite(volume) put '[', volume | percent, '] ' end \
+    if volume != nil put '[', volume | percent, '] ' end \
 \
     if status == 'Stopped' \
         put 'not playing'\

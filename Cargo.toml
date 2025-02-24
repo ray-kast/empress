@@ -4,7 +4,7 @@ members = ["crates/*"]
 
 [workspace.package]
 authors = ["raykast <me@june-s.net>"]
-version = "3.0.0"
+version = "3.0.1"
 edition = "2021"
 repository = "https://github.com/ray-kast/empress"
 license = "AGPL-3.0-or-later"

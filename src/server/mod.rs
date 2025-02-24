@@ -5,9 +5,9 @@ use std::{
 };
 
 use anyhow::{Context, Error};
+use interface::Interface;
 use log::{error, info};
 use regex::{Regex, RegexBuilder};
-use interface::Interface;
 use tokio::{
     select,
     signal::{unix, unix::SignalKind},
@@ -21,12 +21,12 @@ use zbus::{
 use self::mpris::player::PlaybackStatus;
 use crate::{Result, SERVER_NAME, SERVER_PATH};
 
+mod interface;
 pub mod mpris;
 mod player;
 mod player_map;
 mod position;
 mod signal_matcher;
-mod interface;
 
 pub use position::Position;
 

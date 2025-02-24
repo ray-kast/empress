@@ -16,9 +16,7 @@ mod opts {
     impl std::str::FromStr for Offset {
         type Err = std::convert::Infallible;
 
-        fn from_str(_: &str) -> Result<Self, Self::Err> {
-            unreachable!()
-        }
+        fn from_str(_: &str) -> Result<Self, Self::Err> { unreachable!() }
     }
 }
 

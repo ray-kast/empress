@@ -186,9 +186,7 @@ fn json(inp: Input) -> Output {
     )))
 }
 
-fn lower(inp: Input) -> Output {
-    stream_str(inp, |s| s.to_lowercase())
-}
+fn lower(inp: Input) -> Output { stream_str(inp, |s| s.to_lowercase()) }
 
 fn pad_center(inp: Input) -> Output {
     let (_ctx, Topic(Any(val)), (Number::<usize>(len), (Any(pad), ()))) = inp.try_into()?;
@@ -342,13 +340,9 @@ fn time(inp: Input) -> Output {
     Ok(Owned(Value::String(dhmss_micros(len, false))))
 }
 
-fn trim(inp: Input) -> Output {
-    stream_str(inp, |s| s.trim().to_owned())
-}
+fn trim(inp: Input) -> Output { stream_str(inp, |s| s.trim().to_owned()) }
 
-fn upper(inp: Input) -> Output {
-    stream_str(inp, |s| s.to_uppercase())
-}
+fn upper(inp: Input) -> Output { stream_str(inp, |s| s.to_uppercase()) }
 
 fn xml(inp: Input) -> Output {
     static ENTITY_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r#"['"\&<>]"#).unwrap());
