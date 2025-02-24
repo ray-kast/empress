@@ -16,7 +16,6 @@ use crate::server::mpris::player::PlaybackStatus;
 
 pub type Functions = HashMap<&'static str, Function>;
 
-// TODO: add pad function
 pub fn all() -> Functions {
     vec![
         ("blank", blank as Function),
@@ -25,6 +24,9 @@ pub fn all() -> Functions {
         ("join", join),
         ("json", json),
         ("lower", lower),
+        ("padCenter", pad_center),
+        ("padLeft", pad_left),
+        ("padRight", pad_right),
         ("percent", percent),
         ("shorten", shorten),
         ("shortenMid", shorten_mid),
@@ -84,6 +86,22 @@ fn dhmss_micros(mut micros: i64, neg_zero: bool) -> String {
     s
 }
 
+fn pad_string(padding: &str, mut len: usize) -> String {
+    let pad_len = padding.chars().count();
+    let mut s = String::new();
+
+    while len >= pad_len {
+        s.push_str(padding);
+        len -= pad_len;
+    }
+
+    for c in padding.chars().take(len) {
+        s.push(c);
+    }
+
+    s
+}
+
 #[inline]
 fn stream_str(inp: Input, f: impl FnOnce(String) -> String) -> Output {
     let (_ctx, Topic(Any(v)), ()) = inp.try_into()?;
@@ -97,7 +115,6 @@ struct ShortenLen {
     shortened: usize,
 }
 
-#[inline]
 fn shorten_len(s: &str, ellipsis: &str, max_len: usize) -> Result<Option<ShortenLen>> {
     let ell_len = ellipsis.chars().count();
 
@@ -169,7 +186,58 @@ fn json(inp: Input) -> Output {
     )))
 }
 
-fn lower(inp: Input) -> Output { stream_str(inp, |s| s.to_lowercase()) }
+fn lower(inp: Input) -> Output {
+    stream_str(inp, |s| s.to_lowercase())
+}
+
+fn pad_center(inp: Input) -> Output {
+    let (_ctx, Topic(Any(val)), (Number::<usize>(len), (Any(pad), ()))) = inp.try_into()?;
+
+    let val = stringify(val)?;
+    let pad = stringify(pad)?;
+    let len = len.checked_sub(val.chars().count());
+
+    Ok(Owned(Value::String(match len {
+        Some(0) | None => val,
+        Some(l) => {
+            let lower = l / 2;
+            let upper = l - lower;
+
+            format!(
+                "{}{}{}",
+                pad_string(&pad, lower),
+                val,
+                pad_string(&pad, upper)
+            )
+        },
+    })))
+}
+
+fn pad_left(inp: Input) -> Output {
+    let (_ctx, Topic(Any(val)), (Number::<usize>(len), (Any(pad), ()))) = inp.try_into()?;
+
+    let val = stringify(val)?;
+    let pad = stringify(pad)?;
+    let len = len.checked_sub(val.chars().count());
+
+    Ok(Owned(Value::String(match len {
+        Some(0) | None => val,
+        Some(l) => format!("{}{}", val, pad_string(&pad, l)),
+    })))
+}
+
+fn pad_right(inp: Input) -> Output {
+    let (_ctx, Topic(Any(val)), (Number::<usize>(len), (Any(pad), ()))) = inp.try_into()?;
+
+    let val = stringify(val)?;
+    let pad = stringify(pad)?;
+    let len = len.checked_sub(val.chars().count());
+
+    Ok(Owned(Value::String(match len {
+        Some(0) | None => val,
+        Some(l) => format!("{}{}", pad_string(&pad, l), val),
+    })))
+}
 
 fn percent(inp: Input) -> Output {
     let (_ctx, Topic(Number::<f64>(n)), ()) = inp.try_into()?;
@@ -274,9 +342,13 @@ fn time(inp: Input) -> Output {
     Ok(Owned(Value::String(dhmss_micros(len, false))))
 }
 
-fn trim(inp: Input) -> Output { stream_str(inp, |s| s.trim().to_owned()) }
+fn trim(inp: Input) -> Output {
+    stream_str(inp, |s| s.trim().to_owned())
+}
 
-fn upper(inp: Input) -> Output { stream_str(inp, |s| s.to_uppercase()) }
+fn upper(inp: Input) -> Output {
+    stream_str(inp, |s| s.to_uppercase())
+}
 
 fn xml(inp: Input) -> Output {
     static ENTITY_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r#"['"\&<>]"#).unwrap());

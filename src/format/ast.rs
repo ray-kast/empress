@@ -442,10 +442,18 @@ impl<'a> Eval<'a> for Compare<'_> {
     ) -> Result<Self::Output> {
         match self {
             Self::Eq(l, r) => Ok(Owned(Value::Bool(
-                l.eval(ctx, state, topic.clone())? == r.eval(ctx, state, topic)?,
+                partial_cmp(
+                    l.eval(ctx, state, topic.clone())?,
+                    r.eval(ctx, state, topic)?,
+                )?
+                .is_some_and(cmp::Ordering::is_eq),
             ))),
             Self::Neq(l, r) => Ok(Owned(Value::Bool(
-                l.eval(ctx, state, topic.clone())? != r.eval(ctx, state, topic)?,
+                partial_cmp(
+                    l.eval(ctx, state, topic.clone())?,
+                    r.eval(ctx, state, topic)?,
+                )?
+                .is_some_and(cmp::Ordering::is_ne),
             ))),
             Self::Lt(l, r) => Ok(Owned(Value::Bool(
                 partial_cmp(

@@ -22,8 +22,6 @@ use crate::Result;
 mod dead_names;
 mod key_guard;
 
-// TODO: smoke-test map update logic
-
 #[derive(Debug, PartialEq, Eq)]
 struct PlayerKey {
     status: PlaybackStatus,

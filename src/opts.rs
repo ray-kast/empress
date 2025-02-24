@@ -1,10 +1,18 @@
 use std::{fmt, path::PathBuf};
 
-// TODO: add long_help descriptions to all commands
-
 #[derive(clap::Parser)]
 #[command(author, version, max_term_width = 80)]
 /// A D-Bus MPRIS daemon for controlling media players.
+///
+/// Empress is targeted for environments where no solution for managing
+/// multiple MPRIS media players is provided at the desktop environment level
+/// (e.g. running i3wm with no underlying desktop environment). The daemon
+/// itself is spawned with the server subcommand and handles tracking player
+/// activity and maintaining a priority list of which players to dispatch
+/// commands to, as well as broadcasting changes to the playback state of
+/// whichever player is deemed the current one. All other subcommands
+/// communicate with the empress daemon to interact with a media player of its
+/// choosing.
 pub struct Opts {
     #[command(flatten)]
     log: LogOpts,
@@ -115,13 +123,14 @@ pub struct NowPlayingOpts {
 
 #[derive(Debug, Clone, clap::Subcommand)]
 pub enum ClientCommand {
-    /// Scan for any player updates the daemon missed
+    /// Force the empress daemon to scan for available players and update its
+    /// internal player list
     Scan,
-    /// List the players currently tracked by the daemon
+    /// List the players currently tracked by the empress daemon
     ListPlayers,
     /// Print information about the current track
     NowPlaying(NowPlayingOpts),
-    /// Focus a player
+    /// Focus the user interface for a player
     Raise(PlayerOpts),
     /// Skip one track forwards
     Next(PlayerOpts),
@@ -129,13 +138,14 @@ pub enum ClientCommand {
     Previous(PlayerOpts),
     /// Pause a currently-playing player
     Pause(PlayerOpts),
-    /// Like pause if a player is playing, otherwise like play
+    /// If a player is playing, pause it; otherwise, select a paused player and
+    /// play it
     PlayPause(PlayerOpts),
     /// Stop a currently-playing player
     Stop(PlayerOpts),
     /// Play a currently-paused player
     Play(PlayerOpts),
-    /// Seek to a position on a player
+    /// Seek to a position on a player, returning the new position
     Seek {
         #[command(flatten)]
         player: PlayerOpts,
@@ -144,15 +154,13 @@ pub enum ClientCommand {
         /// 5+ or 5-)
         to: Offset,
     },
-    /// Get or set the volume on a player
+    /// Set the volume on a player, returning the new volume
     Volume {
         #[command(flatten)]
         player: PlayerOpts,
 
         /// The volume as a number between 0.0 and 1.0, either absolute (e.g.
-        /// 0.5) or relative (e.g. 0.1+ or 0.1-).  If no value is given
-        /// the current volume is simply printed instead.
-        #[arg(default_value_t = Offset::Relative(0.0))]
+        /// 0.5) or relative (e.g. 0.1+ or 0.1-).
         vol: Offset,
     },
     /// Bump the priority of a specific player

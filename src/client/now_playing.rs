@@ -30,7 +30,6 @@ struct Player {
     id: Option<String>,
 }
 
-// TODO: add volume to output
 #[derive(Debug, Clone, PartialEq, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 struct NowPlaying {
@@ -355,6 +354,8 @@ async fn run_watch(
 
 #[rustfmt::skip]
 const FORMAT_PRETTY: &str = "\
+    if finite(volume) put '[', volume | percent, '] ' end \
+\
     if status == 'Stopped' \
         put 'not playing'\
     else \

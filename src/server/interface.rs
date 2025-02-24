@@ -70,7 +70,7 @@ impl<F: Fn(&Player) -> R, R: Future<Output = Result<Option<T>>>, T> PeekFn for F
 }
 
 #[derive(Clone)]
-pub(super) struct Server {
+pub(super) struct Interface {
     shared: Arc<Shared>,
     dbus: DBusProxy<'static>,
 }
@@ -79,7 +79,7 @@ struct Shared {
     players: RwLock<PlayerMap>,
 }
 
-impl Server {
+impl Interface {
     pub async fn new(
         conn: Connection,
         path: ObjectPath<'static>,
@@ -643,7 +643,7 @@ impl Server {
                     .map_or_else(String::new, Into::into);
                 let ident = player.identity().await?;
                 let status = player.status();
-                let volume = player.volume().await?.unwrap_or(0.0);
+                let volume = player.volume().await?.unwrap_or(f64::NAN);
                 let (rate, position) = if has_track {
                     player.position().await?.map(|p| (p.rate(), p.get(None)))
                 } else {
@@ -675,7 +675,7 @@ impl Server {
 }
 
 #[zbus::interface(name = "club.bnuy.Empress.Daemon")]
-impl Server {
+impl Interface {
     #[zbus(property(emits_changed_signal = "invalidates"))]
     pub async fn now_playing(&self) -> fdo::Result<PlayerStatus> {
         self.handle_method(
@@ -880,6 +880,6 @@ mod tests {
 
     #[test]
     fn test_interface() {
-        assert_eq!(super::Server::name(), crate::INTERFACE_ID.as_ref());
+        assert_eq!(super::Interface::name(), crate::INTERFACE_ID.as_ref());
     }
 }

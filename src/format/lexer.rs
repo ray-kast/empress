@@ -207,6 +207,15 @@ fn ext_token() -> impl FnMut(&str) -> BResult { common_token }
 
 fn common_token(s: &str) -> BResult {
     let tags = alt([
+        btag("||", Token::Or),
+        btag("&&", Token::And),
+        btag("==", Token::Eq),
+        btag("!=", Token::Neq),
+        btag("<", Token::Lt),
+        btag(">", Token::Gt),
+        btag("<=", Token::Le),
+        btag(">=", Token::Ge),
+        //
         btag(".", Token::Dot),
         btag("!", Token::Bang),
         btag(",", Token::Comma),
@@ -217,15 +226,6 @@ fn common_token(s: &str) -> BResult {
         btag(")", Token::RParen),
         btag("[", Token::LBrack),
         btag("]", Token::RBrack),
-        //
-        btag("||", Token::Or),
-        btag("&&", Token::And),
-        btag("==", Token::Eq),
-        btag("!=", Token::Neq),
-        btag("<", Token::Lt),
-        btag(">", Token::Gt),
-        btag("<=", Token::Le),
-        btag(">=", Token::Ge),
         //
         btag("$", Token::Dollar),
         btag(":=", Token::Declare),

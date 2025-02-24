@@ -89,6 +89,8 @@ The default human-readable format of the
 .B now-playing
 command is actually written in the extended syntax as such:
 .RS
+if volume != 0 put \[aq][\[aq], volume | percent, \[aq]] \[aq] end
+.br
 if status == \[aq]Stopped\[aq]
 .RS 2
 .br
@@ -144,7 +146,7 @@ An expression can be one of the following:
 .TP
 .I number
 A numeric literal. Integer (0, 24, 4096, etc.) and floating-point (0.1, 3.0)
-syntax is supported.
+syntax are supported.
 .TP
 \[aq]\fIstring\fP\[aq]
 .TQ
@@ -452,6 +454,22 @@ Returns \fIvalue\fP serialized to a JSON string.
 .TP
 .B \fIvalue\fP | lower
 Returns the string representation of \fIvalue\fP, converted to lowercase.
+.TP
+.B \fIvalue\fP | padCenter(\fIlength\fP, \fIpadding\fP)
+Converts \fIvalue\fP to a string. If the resulting string is shorter than
+\fIlength\fP, appends the string \fIpadding\fP to the start and end until the
+total length is exactly equal to \fIlength\fP and \fIvalue\fP is
+center-aligned.
+.TP
+.B \fIvalue\fP | padLeft(\fIlength\fP, \fIpadding\fP)
+Converts \fIvalue\fP to a string. If the resulting string is shorter than
+\fIlength\fP, appends the string \fIpadding\fP to the end until the total
+length is exactly equal to \fIlength\fP and \fIvalue\fP is left-aligned.
+.TP
+.B \fIvalue\fP | padRight(\fIlength\fP, \fIpadding\fP)
+Converts \fIvalue\fP to a string. If the resulting string is shorter than
+\fIlength\fP, appends the string \fIpadding\fP to the start until the total
+length is exactly equal to \fIlength\fP and \fIvalue\fP is right-aligned.
 .TP
 .B \fIfraction\fP | percent
 Multiplies the input \fIfraction\fP by 100 and formats it as a percentage.

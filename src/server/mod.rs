@@ -7,7 +7,7 @@ use std::{
 use anyhow::{Context, Error};
 use log::{error, info};
 use regex::{Regex, RegexBuilder};
-use server::Server;
+use interface::Interface;
 use tokio::{
     select,
     signal::{unix, unix::SignalKind},
@@ -26,12 +26,7 @@ mod player;
 mod player_map;
 mod position;
 mod signal_matcher;
-// TODO: rename Server to something like Handler
-#[expect(
-    clippy::module_inception,
-    reason = "This is the module for the Server struct"
-)]
-mod server;
+mod interface;
 
 pub use position::Position;
 
@@ -145,7 +140,7 @@ pub async fn run() -> Result {
         .await
         .context("Error connecting to D-Bus")?;
 
-    let (srv, join) = Server::new(conn.clone(), SERVER_PATH.as_ref()).await?;
+    let (srv, join) = Interface::new(conn.clone(), SERVER_PATH.as_ref()).await?;
     let created = conn
         .object_server()
         .at(&*SERVER_PATH, srv)
@@ -180,7 +175,7 @@ pub async fn run() -> Result {
 
     let srv = conn
         .object_server()
-        .remove::<Server, _>(&*SERVER_PATH)
+        .remove::<Interface, _>(&*SERVER_PATH)
         .await
         .context("Error unregistering server")?;
 
