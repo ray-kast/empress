@@ -31,11 +31,24 @@ variable \fIname\fP.
 \fB{{\~if\fP\~\fIexpr\fP\~\fB}}\fP \fIsegment...\fP \
 [\~\fB{{\~elif\fP\~\fIexpr\fP\~\fB}}\fP \fIsegment...\fP\~]\~\fI...\fP \
 [\~\fB{{\~else\~}}\fP \fIsegment...\fP\~] \fB{{\~end\~}}\fP
-.B TODO
+An if-else conditional block. If the \fBif\fP \fIexpr\fP evaluates to true,
+each \fIsegment\fP immediately following is evaluated. Otherwise, each
+\fBelif\fP \fIexpr\fP is evaluated in turn until one evaluates to true, and
+then each corresponding \fIsegment\fP is evaluated. If no \fIexpr\fP evaluates
+to true and an \fBelse\fP block is present, each \fIsegment\fP of the
+\fBelse\fP block will be evaluated.
 .RE
 .PP
 Segments are evaluated in sequence and their resulting values are concatenated
 and printed.
+.PP
+For example, here is a simple format string using the default syntax, which
+displays the title and artist of the current track:
+.RS
+.PP
+{{ artists |! join(\[aq], \[aq]) ?? \[aq]Unknown Artist\[aq] }} \eu{2014} {{
+title ?? \[aq]No Title\[aq] }}
+.RE
 .SS Extended Syntax
 When the
 .B \-\-extended
@@ -48,7 +61,7 @@ expressions. Extended format strings are parsed as a sequence of
 \fIcommands\fP, where each command is one of the following:
 .RS
 .TP
-\fBput\fP\~\fIexpr\fP [\~,\~\fIexpr\fP\~]\~...
+\fBput\fP\~\fIexpr\fP [\~\fB,\fP\~\fIexpr\fP\~]\~...
 Evaluate each \fIexpr\fP and print their resulting values, concatenated in
 order. See
 .B Expression Syntax
@@ -61,11 +74,201 @@ to the variable \fIname\fP.
 \fBif\fP\~\fIexpr\fP \fIcommand...\fP \
 [\~\fBelif\fP\~\fIexpr\fP \fIcommand...\fP\~]\~\fI...\fP \
 [\~\fBelse\fP \fIcommand...\fP\~] \fBend\fP
-.B TODO
+An if-else conditional block. If the \fBif\fP \fIexpr\fP evaluates to true,
+each \fIcommand\fP immediately following is evaluated. Otherwise, each
+\fBelif\fP \fIexpr\fP is evaluated in turn until one evaluates to true, and
+then each corresponding \fIcommand\fP is evaluated. If no \fIexpr\fP evaluates
+to true and an \fBelse\fP block is present, each \fIcommand\fP of the
+\fBelse\fP block will be evaluated.
 .RE
 .PP
+Commands are evaluated in sequence, and the output of all \fBput\fI commands
+are concatenated in order and printed.
+.PP
+The default human-readable format of the
+.B now-playing
+command is actually written in the extended syntax as such:
+.RS
+if status == \[aq]Stopped\[aq]
+.RS 2
+.br
+    put \[aq]not playing\[aq]
+.RE
+.br
+else
+.RS 2
+.br
+    put status | symbol, \[aq] \[aq]
+.br
+    if blank([title, artists, album])
+.RS 2
+.br
+        put player.id
+.RE
+.br
+    else
+.RS 2
+.br
+        if !blank(artists)
+.RS 2
+.br
+            put artists | compact | join(\[aq], \[aq]) ?? \[aq]Unknown\[aq], \[aq] \eu{2014} \[aq]
+.RE
+.br
+        end
+.br
+        put title ?? \[aq]No Title\[aq]
+.br
+        if !blank(album) put \[aq] (\[aq], album, \[aq])\[aq] end
+.RE
+.br
+    end
+.br
+
+.br
+    let ts := [position |! time, length |! time] | compact | join(\[aq]/\[aq])
+.br
+    if !blank(ts) put \[aq] [\[aq], ts, \[aq]]\[aq] end
+.RE
+.br
+end
+.RE
 .SS Expression Syntax
-.B TODO
+Expressions are evaluated as a value, followed by an optional sequence of
+pipeline operations. As a result, several types of expressions and functions
+accept a \fItopic value\fP, which is provided as the result of evaluating the
+previous expression in the current pipeline.
+.PP
+An expression can be one of the following:
+.\" From ast::Prim
+.TP
+.I number
+A numeric literal. Integer (0, 24, 4096, etc.) and floating-point (0.1, 3.0)
+syntax is supported.
+.TP
+\[aq]\fIstring\fP\[aq]
+.TQ
+\[dq]\fIstring\fP\[dq]
+A string literal. Escape sequences are supported, see the section
+.B String Escapes
+below for more details.
+.TP
+.B nil
+A nil literal.
+.TP
+.B true
+.TQ
+.B false
+Boolean literals, for true and false respectively.
+.TP
+.I name
+The name of a variable if at the start of a pipeline, otherwise the name of a
+function to pipe the current topic value into.
+.TP
+.B []
+.TQ
+\fB[\fP\fIexpr\fP [\~\fB,\fP \fIexpr\fP\~]\~...\fB]\fP
+An array literal containing a sequence of zero or more expressions.
+.TP
+.B \fIname\fP()
+.TQ
+\fIname\fP\fB(\fP\fIarg\fP [\~\fB,\fP \fIarg\fP\~]\~...\fB)\fP
+A function invocation, taking zero or more arguments in addition to the current
+topic value in the pipeline. Each argument may take one of two forms:
+.RS
+.IP
+.I expr
+.RE
+.IP
+or
+.RS
+.IP
+.I expr\fB!\fI
+.RE
+.IP
+If any arguments in the latter form are present and evaluate to nil, evaluation
+of the function is skipped and returns nil instead. This is useful in cases
+like the following:
+.RS
+.IP
+position |! eta(len!)
+.RE
+.IP
+If the argument \fIlen\fP is nil, evaluation of eta(len) is skipped entirely,
+thus avoiding the eta function throwing an invalid argument error.
+.TP
+.B .\fIname\fP
+.TQ
+.B .[\fIindex\fP]
+Topic index/member expressions. In the first form, indexes the topic value with
+the string identifier \fIname\fP if the topic is an object. In the second form,
+an arbitrary expression \fIindex\fP is evaluated and, if the topic is an object
+or array, indexes it with the resulting value.
+.TP
+.B (\fIexpr\fP)
+Parenthetical expression.  Evaluates \fIexpr\fP, resetting operator precedence.
+.\" From ast::Member
+.TP
+.B \fIexpr\fP.\fIname\fP
+.TQ
+.B \fIexpr\fP[\fIindex\fP]
+Value index/member expressions. In the first form, indexes \fIexpr\fP with the
+string identifier \fIname\fP if \fIexpr\fP evaluates to an object. In the
+second form, an arbitrary expression \fIindex\fP is evaluated and, if
+\fIexpr\fP evaluates to an object or array, indexes it with the resulting
+value.
+.\" From ast::Unop
+.TP
+.B !\fIexpr\fP
+Logical negation. Operates on Boolean values only.
+.\" From ast::Compare
+.TP
+.B \fIlhs\fP == \fIrhs\fP
+.TQ
+.B \fIlhs\fP != \fIrhs\fP
+.TQ
+.B \fIlhs\fP < \fIrhs\fP
+.TQ
+.B \fIlhs\fP > \fIrhs\fP
+.TQ
+.B \fIlhs\fP <= \fIrhs\fP
+.TQ
+.B \fIlhs\fP >= \fIrhs\fP
+Comparison operators. Evaluates to true if \fIlhs\fP is equal to; not equal to;
+less than; greater than; less than or equal to; or greater than or equal to
+\fIrhs\fP, respectively.
+.\" From ast::And
+.TP
+.B \fIlhs\fP && \fIrhs\fP
+Logical AND expression. If \fIlhs\fP evaluates to true, this evaluates to the
+result of \fIrhs\fP, or false otherwise.
+.\" From ast::Or
+.TP
+.B \fIlhs\fP || \fIrhs\fP
+Logical OR expression. If \fIlhs\fP evaluates to false, this evaluates to the
+result of \fIrhs\fP, or true otherwise.
+.\" From ast::Pipeline
+.TP
+.B \fIlhs\fP | \fIrhs\fP
+Pipe expression. Evaluates \fIrhs\fP with the topic value set to the result of
+evaluating \fIlhs\fP.
+.\" From ast::NullPipeline
+.TP
+.B \fIlhs\fP |! \fIrhs\fP
+Null-propagating pipe expression. If \fIlhs\fP evaluates to nil, this evaluates
+to nil; otherwise evaluates \fIrhs\fP with the topic value set to the resulting
+value from \fIlhs\fP.
+.\" From ast::NullChain
+.TP
+.B \fIlhs\fP ?? \fIrhs\fP
+Null-coalescing expression. If \fIlhs\fP evaluates to nil, this evaluates to
+the result of \fIrhs\fP, or to the resulting value from \fIlhs\fP otherwise.
+.\" From ast::Ternary
+.TP
+.B if \fIcondition\fP then \fIexpr\fP else \fIexpr\fP
+Ternary if/else expression. If \fIcondition\fP evaluates to true, this
+evaluates to the result of the \fBthen\fP \fIexpr\fP; otherwise it evaluates to
+the result of the \fBelse\fP \fIexpr\fP.
 .SS String Escapes
 Raw strings and string expressions support a range of escape sequences prefixed
 with a backslash. The following escapes are supported:
@@ -123,18 +326,118 @@ world\[dq]:
 world\[dq]
 .RE
 .SS Variable Reference
-.B TODO
+The following variables are provided to format string expressions:
+.TP
+.B player.bus
+\fIstring?\fP: the D-Bus bus name of the player, with the prefix
+\fIorg.mpris.MediaPlayer2\fP stripped
+.TP
+.B player.id
+\fIstring?\fP: the friendly name of the player
+.TP
+.B status
+\fIstring\fP: current playback status
+.RS
+.TP
+.B Playing
+a track is currently playing
+.TP
+.B Paused
+a track is currently paused
+.TP
+.B Stopped
+there is no track currently playing
+.RE
+.TP
+.B volume
+\fInumber\fP: the current volume, with 0.0 being silent and 1.0 being 100%
+.TP
+.B rate
+\fInumber\fP: the current playback speed
+.TP
+.B position
+\fInumber?\fP: the current playback position, in microseconds
+.TP
+.B trackId
+\fIstring?\fP: MPRIS track object ID representing the current track
+.TP
+.B length
+\fInumber?\fP: the length of the current track, in microseconds
+.TP
+.B artUrl
+\fIstring?\fP: URL for cover art of the current track
+.TP
+.B album
+\fIstring?\fP: the album for the current track
+.TP
+.B albumArtists
+\fIstring[]?\fP: the artists for the current album
+.TP
+.B artists
+\fIstring[]?\fP: the artists for the current track
+.TP
+.B lyrics
+\fIstring?\fP: the lyrics for the current track
+.TP
+.B bpm
+\fInumber?\fP: the BPM of the current track
+.TP
+.B autoRating
+\fInumber?\fP: computer-generated rating for the current track, between 0.0 and
+1.0
+.TP
+.B comments
+\fIstring[]?\fP: any comments attached to the current track
+.TP
+.B composers
+\fIstring[]?\fP: the composers of the current track
+.TP
+.B dateCreated
+\fIstring?\fP: (formatted as a date and time) when the current track was
+created or released
+.TP
+.B discNum
+\fInumber?\fP: the disc number of the current track
+.TP
+.B dateFirstPlayed
+\fIstring?\fP: (formatted as a date and time) when the current track was
+first played
+.TP
+.B genres
+\fIstring[]?\fP: the genres of the current track
+.TP
+.B dateLastPlayed
+\fIstring?\fP: (formatted as a date and time) when the current track was most
+recently played
+.TP
+.B lyricists
+\fIstring[]?\fP: the lyricists for the current track
+.TP
+.B title
+\fIstring?\fP: the title of the current track
+.TP
+.B trackNum
+\fInumber?\fP: the current track number
+.TP
+.B url
+\fIstring?\fP: URL for the location of the current track
+.TP
+.B playCount
+\fInumber?\fP: play count of the current track
+.TP
+.B userRating
+\fInumber?\fP: user-specified rating for the current track, between 0.0 and 1.0
+.PP
 .SS Function Reference
 The following functions are available when evaluating expressions:
-.RS
 .TP
 .B blank(\fIexpr\fP)
 Evaluates to true if \fIexpr\fP is \[lq]blank\[rq] according to a heuristic.
-Null or false values, zeroes, empty or whitespace-only strings, empty objects,
+Nil or false values, zeroes, empty or whitespace-only strings, empty objects,
 and arrays with no non-blank values are all considered blank.
 .TP
 .B \fIarray\fP | compact
-Returns the input \fIarray\fP with all null values and empty strings removed
+Returns the input \fIarray\fP with all nil values and empty strings removed
 .TP
 .B \fItime\fP | eta(\fIduration\fP)
 Formats the remaining time between \fItime\fP and \fIduration\fP in h:mm:ss
@@ -194,5 +497,4 @@ Returns the string representation of \fIvalue\fP, converted to lowercase.
 Returns the string representation of \fIvalue\fP, with all invalid XML
 characters replaced with their corresponding entities. Useful if the formatted
 output must be valid Pango or HTML markup.
-.RE
 .PP
