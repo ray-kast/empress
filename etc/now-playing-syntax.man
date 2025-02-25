@@ -89,7 +89,7 @@ The default human-readable format of the
 .B now-playing
 command is actually written in the extended syntax as such:
 .RS
-if volume != 0 put \[aq][\[aq], volume | percent, \[aq]] \[aq] end
+if volume != nil put \[aq][\[aq], volume | percent, \[aq]] \[aq] end
 .br
 if status == \[aq]Stopped\[aq]
 .RS 2
@@ -114,7 +114,8 @@ else
         if !blank(artists)
 .RS 2
 .br
-            put artists | compact | join(\[aq], \[aq]) ?? \[aq]Unknown\[aq], \[aq] \eu{2014} \[aq]
+            put artists | compact | join(\[aq], \[aq]) ?? \[aq]Unknown\[aq], \
+\[aq] \eu{2014} \[aq]
 .RE
 .br
         end
@@ -280,12 +281,12 @@ with a backslash. The following escapes are supported:
 \fI(inside a raw string)\fP a \fB{\fP left bracket character
 .TP
 .B \e\[aq]
-\fI(inside a single-quoted \[aq]...\[aq] string)\fP an ASCII \fB\[aq]\fP single quote
-character
+\fI(inside a single-quoted \[aq]...\[aq] string)\fP an ASCII \fB\[aq]\fP single
+quote character
 .TP
 .B \e\[dq]
-\fI(inside a double-quoted \[dq]...\[dq] string)\fP an ASCII \fB\[dq]\fP double quote
-character
+\fI(inside a double-quoted \[dq]...\[dq] string)\fP an ASCII \fB\[dq]\fP double
+quote character
 .TP
 .B \e\e
 a literal backslash character
