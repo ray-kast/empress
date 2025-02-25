@@ -23,19 +23,19 @@ use crate::{
     Result,
 };
 
-#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+#[derive(Debug, Default, Clone, PartialEq, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 struct Player {
     bus: Option<String>,
     id: Option<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+#[derive(Debug, Default, Clone, PartialEq, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 struct NowPlaying {
     player: Player,
     status: PlaybackStatus,
-    volume: f64,
+    volume: Option<f64>,
     rate: f64,
     position: Option<i64>,
 
@@ -174,7 +174,7 @@ impl TryFrom<PlayerStatus> for NowPlaying {
         Ok(Self {
             player: Player { bus, id },
             status,
-            volume,
+            volume: volume.is_finite().then_some(volume),
             rate,
             position,
             track_id,
@@ -234,7 +234,7 @@ pub async fn run(conn: &zbus::Connection, opts: NowPlayingOpts) -> Result {
     let status = super::try_run(conn, StatusCommand(&player)).await?;
 
     let status = status.try_into()?;
-    fmt.print(&status)?;
+    fmt.print(&status, io::stdout().lock())?;
 
     if opts.watch {
         run_watch(conn, player, fmt, status).await?;
@@ -348,7 +348,7 @@ async fn run_watch(
             WatchEvent::Stop(r) => break r.context("Error catching ^C"),
         }
 
-        fmt.print(&status)?;
+        fmt.print(&status, io::stdout().lock())?;
     }
 }
 
@@ -439,7 +439,7 @@ impl<'a> Formatter<'a> {
         })
     }
 
-    fn print(&mut self, status: &NowPlaying) -> Result {
+    fn print(&mut self, status: &NowPlaying, mut out: impl io::Write) -> Result {
         let mut s: String = match self.ty {
             FormatterType::Json => serde_json::to_string(status)?,
             FormatterType::Pretty(ref f) => f.run(status)?,
@@ -450,21 +450,85 @@ impl<'a> Formatter<'a> {
         }
 
         if self.last.as_ref().is_none_or(|l| *l != s) {
-            use io::prelude::*;
-            let mut io = io::stdout().lock();
-            write!(io, "{s}")?;
+            write!(out, "{s}")?;
 
             match self.sep {
-                FormatterSep::Watch(c) => write!(io, "{c}")?,
-                FormatterSep::Oneshot(true) => writeln!(io)?,
+                FormatterSep::Watch(c) => write!(out, "{c}")?,
+                FormatterSep::Oneshot(true) => writeln!(out)?,
                 FormatterSep::Oneshot(false) => (),
             }
 
-            io.flush()?;
+            out.flush()?;
 
             self.last = Some(s);
         }
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::{FormatData, Formatter, NowPlaying, Player};
+    use crate::{
+        opts::{FormatKind, NowPlayingFormat, NowPlayingOpts, PlayerOpts},
+        server::mpris::player::PlaybackStatus,
+    };
+
+    #[test]
+    fn eval_pretty() {
+        let opts = NowPlayingOpts {
+            player: PlayerOpts::default(),
+            format: NowPlayingFormat {
+                string: None,
+                file: None,
+                extended: false,
+                kind: FormatKind::Pretty,
+            },
+            watch: false,
+            zero: false,
+            no_lf: true,
+        };
+        let fmt = FormatData::prepare(&opts.format).unwrap();
+        let mut fmt = Formatter::new(&fmt, &opts).unwrap();
+
+        let mut v = vec![];
+        fmt.print(&NowPlaying::default(), &mut v).unwrap();
+        assert_eq!(std::str::from_utf8(&v).unwrap(), "not playing");
+
+        v.clear();
+        fmt.print(
+            &NowPlaying {
+                status: PlaybackStatus::Playing,
+                player: Player {
+                    bus: Some("my-player".into()),
+                    id: Some("My Player".into()),
+                },
+                volume: Some(0.999),
+                ..NowPlaying::default()
+            },
+            &mut v,
+        )
+        .unwrap();
+        assert_eq!(std::str::from_utf8(&v).unwrap(), "[99%] ▶ My Player");
+
+        v.clear();
+        fmt.print(
+            &NowPlaying {
+                status: PlaybackStatus::Playing,
+                title: Some("test track".into()),
+                artists: Some(vec!["test artist".into(), "another test".into()]),
+                album: Some("test album".into()),
+                position: Some(16_000_000),
+                length: Some(128_000_000),
+                ..NowPlaying::default()
+            },
+            &mut v,
+        )
+        .unwrap();
+        assert_eq!(
+            std::str::from_utf8(&v).unwrap(),
+            "▶ test artist, another test — test track (test album) [0:16/2:08]"
+        );
     }
 }

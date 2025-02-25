@@ -192,7 +192,7 @@ pub enum PlaybackStatus {
 }
 
 /// Options for filtering the search set of players for the daemon
-#[derive(Debug, Clone, clap::Args)]
+#[derive(Debug, Default, Clone, clap::Args)]
 pub struct PlayerOpts {
     /// Select players whose bus names match the given regular expression
     #[arg(short, long, conflicts_with("ibus"))]

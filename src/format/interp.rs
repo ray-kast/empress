@@ -57,8 +57,6 @@ pub enum Error {
     Shadow(String),
     #[error("Value {} must be a boolean", json(.0))]
     BadCondition(Value),
-    #[error("Values {} and {} cannot be compared", json(.0), json(.1))]
-    BadCompare(Value, Value),
     #[error("Value {val} has no field {1:?}", val = json(.0))]
     BadPath(Value, String),
     #[error("Value {} has no index {}", json(.0), json(.1))]

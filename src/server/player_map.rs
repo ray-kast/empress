@@ -78,7 +78,7 @@ fn active_keys(keys: &KeyMap) -> impl Iterator<Item = &PlayerKey> {
     let mut prev = None;
 
     keys.iter().take_while(move |p| {
-        let ret = prev.map_or(true, |s| s == p.status);
+        let ret = prev.is_none_or(|s| s == p.status);
         prev = Some(p.status);
 
         if !ret {

@@ -380,8 +380,8 @@ pub enum Compare<'a> {
     Next(Unop<'a>),
 }
 
-fn partial_cmp(l: CowValue<'_>, r: CowValue<'_>) -> Result<Option<cmp::Ordering>> {
-    Ok(match (l, r) {
+fn partial_cmp(l: CowValue<'_>, r: CowValue<'_>) -> Option<cmp::Ordering> {
+    match (l, r) {
         (
             Owned(Value::Null) | Borrowed(Value::Null),
             Owned(Value::Null) | Borrowed(Value::Null),
@@ -418,7 +418,7 @@ fn partial_cmp(l: CowValue<'_>, r: CowValue<'_>) -> Result<Option<cmp::Ordering>
 
             'chk: {
                 for i in 0..len {
-                    match partial_cmp(Borrowed(&lhs[i]), Borrowed(&rhs[i]))? {
+                    match partial_cmp(Borrowed(&lhs[i]), Borrowed(&rhs[i])) {
                         Some(cmp::Ordering::Equal) => (),
                         o => break 'chk o,
                     }
@@ -427,8 +427,8 @@ fn partial_cmp(l: CowValue<'_>, r: CowValue<'_>) -> Result<Option<cmp::Ordering>
                 Some(l.len().cmp(&r.len()))
             }
         },
-        (l, r) => return Err(Error::BadCompare(l.into_owned(), r.into_owned())),
-    })
+        (..) => None,
+    }
 }
 
 impl<'a> Eval<'a> for Compare<'_> {
@@ -445,42 +445,42 @@ impl<'a> Eval<'a> for Compare<'_> {
                 partial_cmp(
                     l.eval(ctx, state, topic.clone())?,
                     r.eval(ctx, state, topic)?,
-                )?
+                )
                 .is_some_and(cmp::Ordering::is_eq),
             ))),
             Self::Neq(l, r) => Ok(Owned(Value::Bool(
                 partial_cmp(
                     l.eval(ctx, state, topic.clone())?,
                     r.eval(ctx, state, topic)?,
-                )?
-                .is_some_and(cmp::Ordering::is_ne),
+                )
+                .is_none_or(cmp::Ordering::is_ne),
             ))),
             Self::Lt(l, r) => Ok(Owned(Value::Bool(
                 partial_cmp(
                     l.eval(ctx, state, topic.clone())?,
                     r.eval(ctx, state, topic)?,
-                )?
+                )
                 .is_some_and(cmp::Ordering::is_lt),
             ))),
             Self::Gt(l, r) => Ok(Owned(Value::Bool(
                 partial_cmp(
                     l.eval(ctx, state, topic.clone())?,
                     r.eval(ctx, state, topic)?,
-                )?
+                )
                 .is_some_and(cmp::Ordering::is_gt),
             ))),
             Self::Le(l, r) => Ok(Owned(Value::Bool(
                 partial_cmp(
                     l.eval(ctx, state, topic.clone())?,
                     r.eval(ctx, state, topic)?,
-                )?
+                )
                 .is_some_and(cmp::Ordering::is_le),
             ))),
             Self::Ge(l, r) => Ok(Owned(Value::Bool(
                 partial_cmp(
                     l.eval(ctx, state, topic.clone())?,
                     r.eval(ctx, state, topic)?,
-                )?
+                )
                 .is_some_and(cmp::Ordering::is_ge),
             ))),
             Self::Next(e) => e.eval(ctx, state, topic),
