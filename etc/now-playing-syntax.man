@@ -82,7 +82,7 @@ to true and an \fBelse\fP block is present, each \fIcommand\fP of the
 \fBelse\fP block will be evaluated.
 .RE
 .PP
-Commands are evaluated in sequence, and the output of all \fBput\fI commands
+Commands are evaluated in sequence, and the output of all \fBput\fP commands
 are concatenated in order and printed.
 .PP
 The default human-readable format of the
@@ -206,7 +206,7 @@ thus avoiding the eta function throwing an invalid argument error.
 Topic index/member expressions. In the first form, indexes the topic value with
 the string identifier \fIname\fP if the topic is an object. In the second form,
 an arbitrary expression \fIindex\fP is evaluated and, if the topic is an object
-or array, indexes it with the resulting value.
+or array, it is indexed with the resulting value.
 .TP
 .B (\fIexpr\fP)
 Parenthetical expression.  Evaluates \fIexpr\fP, resetting operator precedence.
@@ -237,8 +237,8 @@ Logical negation. Operates on Boolean values only.
 .B \fIlhs\fP <= \fIrhs\fP
 .TQ
 .B \fIlhs\fP >= \fIrhs\fP
-Comparison operators. Evaluates to true if \fIlhs\fP is equal to; not equal to;
-less than; greater than; less than or equal to; or greater than or equal to
+Comparison expression. Evaluates to true if \fIlhs\fP is equal to; not equal
+to; less than; greater than; less than or equal to; or greater than or equal to
 \fIrhs\fP, respectively.
 .\" From ast::And
 .TP
@@ -259,8 +259,8 @@ evaluating \fIlhs\fP.
 .TP
 .B \fIlhs\fP |! \fIrhs\fP
 Null-propagating pipe expression. If \fIlhs\fP evaluates to nil, this evaluates
-to nil; otherwise evaluates \fIrhs\fP with the topic value set to the resulting
-value from \fIlhs\fP.
+to nil; otherwise it evaluates \fIrhs\fP with the topic value set to the
+resulting value from \fIlhs\fP.
 .\" From ast::NullChain
 .TP
 .B \fIlhs\fP ?? \fIrhs\fP
@@ -310,7 +310,7 @@ a carriage return character
 a tab character
 .TP
 .B \ee
-an \fBESC\fP character (hex 1B)
+an \fBESC\fP character (equivalent to \ex1B)
 .TP
 .B \ex\fIXX\fP
 a single-byte character with hexadecimal value \fIXX\fP
@@ -326,7 +326,9 @@ world\[dq]:
 .RS
 \[dq]hello, \e
 .br
+.RS 2
 world\[dq]
+.RE
 .RE
 .SS Variable Reference
 The following variables are provided to format string expressions:
