@@ -144,7 +144,7 @@ fn main() {
         match id {
             "now-playing" => render(&opts, cmd, name, ["etc/now-playing-syntax.man"]),
             _ => render(&opts, cmd, name, None::<&Path>),
-        };
+        }
     }
 
     render(&opts, cmd, ["empress"], None::<&Path>);

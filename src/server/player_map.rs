@@ -157,10 +157,7 @@ impl PlayerMap {
                         }
                     },
                     Ok(None) => (),
-                    Err(e) => {
-                        warn!("Error refreshing player: {e:?}");
-                        continue;
-                    },
+                    Err(e) => warn!("Error refreshing player: {e:?}"),
                 }
             }
         }

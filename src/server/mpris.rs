@@ -127,10 +127,7 @@ pub mod player {
             let s: zvariant::Str = value.try_into()?;
 
             s.parse().map_err(|e: strum::ParseError| {
-                zvariant::Error::InputOutput(std::sync::Arc::new(std::io::Error::new(
-                    std::io::ErrorKind::Other,
-                    e,
-                )))
+                zvariant::Error::InputOutput(std::sync::Arc::new(std::io::Error::other(e)))
             })
         }
     }

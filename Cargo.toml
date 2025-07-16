@@ -4,13 +4,13 @@ members = ["crates/*"]
 
 [workspace.package]
 authors = ["raykast <me@june-s.net>"]
-version = "3.0.2"
-edition = "2021"
+version = "3.0.3"
+edition = "2024"
 repository = "https://github.com/ray-kast/empress"
 license = "AGPL-3.0-or-later"
 
 [workspace.dependencies]
-clap = { version = "4.5.20", features = ["cargo", "derive", "wrap_help"] }
+clap = { version = "4.5.41", features = ["cargo", "derive", "wrap_help"] }
 
 [workspace.lints.rust]
 missing_debug_implementations = "deny"
@@ -49,27 +49,27 @@ lto = "thin"
 strip = true
 
 [dependencies]
-anyhow = "1.0.91"
-async-trait = "0.1.83"
+anyhow = "1.0.98"
+async-trait = "0.1.88"
 clap.workspace = true
-dispose = "0.5.1"
-env_logger = "0.11.5"
+dispose = "0.5.2"
+env_logger = "0.11.8"
 futures-util = "0.3.31"
-jiff = { version = "0.1.14", features = ["logging", "serde"] }
-lalrpop-util = { version = "0.22.0", features = ["lexer"] }
-log = "0.4.22"
+jiff = { version = "0.2.15", features = ["logging", "serde"] }
+lalrpop-util = { version = "0.22.2", features = ["lexer"] }
+log = "0.4.27"
 nom = "8.0.0"
 regex = "1.11.1"
-serde = { version = "1.0.213", features = ["derive"] }
-serde_json = "1.0.132"
-spin = "0.9.8"
-strum = { version = "0.26.3", features = ["derive"] }
-thiserror = "2.0.3"
-unicode-ident = "1.0.16"
-zbus = { version = "5.0.1", default-features = false, features = ["tokio"] }
+serde = { version = "1.0.219", features = ["derive"] }
+serde_json = "1.0.140"
+spin = "0.10.0"
+strum = { version = "0.27.1", features = ["derive"] }
+thiserror = "2.0.12"
+unicode-ident = "1.0.18"
+zbus = { version = "5.9.0", default-features = false, features = ["tokio"] }
 
 [dependencies.tokio]
-version = "1.41.0"
+version = "1.46.1"
 features = [
   "macros",
   "net",
@@ -81,7 +81,7 @@ features = [
 ]
 
 [build-dependencies]
-lalrpop = "0.22.0"
+lalrpop = "0.22.2"
 
 [lints]
 workspace = true

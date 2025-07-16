@@ -629,17 +629,13 @@ impl<'a> Eval<'a> for Prim<'_> {
             assert_topic(&topic, self)?;
         }
 
-        #[expect(
-            clippy::needless_borrowed_reference,
-            reason = "`&ref s` is the least inelegant way I could think of to match &&str as &str"
-        )]
         match self {
             Self::Paren(e) => e.eval(ctx, state, topic),
             Self::LensIdent(i) => lens_ident(topic.unwrap_or_else(|| unreachable!()), i),
             Self::LensIndex(e) => {
                 lens_index(ctx, state, topic.unwrap_or_else(|| unreachable!()), e)
             },
-            Self::Call(&ref i, a) => call(ctx, state, topic, i, a.as_ref()),
+            &Self::Call(i, ref a) => call(ctx, state, topic, i, a.as_ref()),
             Self::Array(a) => a
                 .as_ref()
                 .map_or_else(|| Ok(Some(vec![])), |a| a.eval(ctx, state, None))
@@ -650,7 +646,7 @@ impl<'a> Eval<'a> for Prim<'_> {
                         ))
                     })
                 }),
-            Self::Ident(&ref i) => match topic {
+            &Self::Ident(i) => match topic {
                 // A little hacky, but if a topic is present treat idents as a
                 // call rather than a value
                 topic @ Some(_) => call(ctx, state, topic, i, None),

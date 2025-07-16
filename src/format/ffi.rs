@@ -162,7 +162,7 @@ impl<'a> TryFrom<CowValue<'a>> for Any<'a> {
     fn try_from(val: CowValue<'a>) -> Result<Self> { Ok(Self(val)) }
 }
 
-pub struct Array<'a>(pub Cow<'a, Vec<Value>>);
+pub struct Array<'a>(pub Cow<'a, [Value]>);
 
 impl<'a> TryFrom<CowValue<'a>> for Array<'a> {
     type Error = Error;

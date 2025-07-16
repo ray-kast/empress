@@ -8,8 +8,8 @@ publish = false
 [dependencies]
 clap.features = ["derive", "string"]
 clap.workspace = true
-clap_mangen = "0.2.26"
-flate2 = "1.0.35"
+clap_mangen = "0.2.28"
+flate2 = "1.1.2"
 
 [lints]
 workspace = true

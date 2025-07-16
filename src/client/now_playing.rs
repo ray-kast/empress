@@ -319,7 +319,7 @@ async fn run_watch(
                     let last = status.position;
                     let curr = pos.get(None);
                     let curr_rem = curr % MICROS_PER_SEC;
-                    // Make sure the seconds
+                    // Make sure the seconds actually increment
                     status.position = Some(
                         if last.is_some_and(|l| l - l % MICROS_PER_SEC == curr - curr_rem) {
                             curr + MICROS_PER_SEC - curr_rem
@@ -392,7 +392,7 @@ impl<'a> FormatData<'a> {
             (FormatKind::Pretty, Some(s), None) => Self::Pretty(s.into(), format.extended),
             (FormatKind::Pretty, None, Some(p)) => {
                 let mut s = fs::read_to_string(p)
-                    .with_context(|| format!("Error reading format from {p:?}"))?;
+                    .with_context(|| format!("Error reading format from {}", p.display()))?;
 
                 if let Some(t) = s.strip_suffix('\n') {
                     s.truncate(t.len());
